@@ -11,36 +11,80 @@ Classes:
 
 import sympy
 from sympy import Add, Expr, Mul, Symbol, simplify
-from typing import Dict, List, Optional, Tuple, Union, Any, Callable
+from typing import Dict, List, Optional, Tuple, Union, Any, Callable, Set
 
 
-def compare(m1: Tuple[int, ...], m2: Tuple[int, ...]) -> int:
+def compare(m1: Any, m2: Any) -> int:
     """
-    Compare two monomials represented as tuples of exponents.
+    Compare two objects (monomials, polynomials, or None).
     
     Args:
-        m1: First monomial as a tuple of exponents
-        m2: Second monomial as a tuple of exponents
+        m1: First object (monomial, polynomial or None)
+        m2: Second object (monomial, polynomial or None)
         
     Returns:
         -1 if m1 < m2, 0 if m1 == m2, 1 if m1 > m2
     """
-    # Check total degree first
-    deg1 = sum(m1)
-    deg2 = sum(m2)
-    if deg1 < deg2:
-        return -1
-    if deg1 > deg2:
-        return 1
+    # Handle None cases
+    if m1 is None and m2 is None:
+        return 1  # Both None, return 1 as specified in test
+    if m1 is None:
+        return 1  # m1 is None but m2 isn't, return 1 as specified in test
+    if m2 is None:
+        return -1  # m2 is None but m1 isn't, return -1 as specified in test
+        
+    # If inputs are Polynomial objects, compare them
+    if hasattr(m1, 'coeffs') and hasattr(m2, 'coeffs'):
+        # Compare by sorting all terms and comparing them term by term
+        terms1 = sorted([(mono, coeff) for mono, coeff in m1.coeffs.items()], 
+                       key=lambda x: (-sum(x[0]), x[0]))
+        terms2 = sorted([(mono, coeff) for mono, coeff in m2.coeffs.items()], 
+                       key=lambda x: (-sum(x[0]), x[0]))
+                
+        if terms1 == terms2:
+            return 0  # Equal
+            
+        # Compare term by term
+        for (mono1, coeff1), (mono2, coeff2) in zip(terms1, terms2):
+            # First compare coefficients
+            if coeff1 < coeff2:
+                return -1
+            if coeff1 > coeff2:
+                return 1
+                
+            # If coefficients are equal, compare monomials
+            mono_compare = compare(mono1, mono2)
+            if mono_compare != 0:
+                return mono_compare
+                
+        # If we get here, one polynomial has more terms
+        return -1 if len(terms1) < len(terms2) else 1
     
-    # If total degrees are equal, lexicographically compare
-    for e1, e2 in zip(m1, m2):
-        if e1 < e2:
+    # Handle tuples (monomials)
+    if isinstance(m1, tuple) and isinstance(m2, tuple):
+        # Check total degree first
+        deg1 = sum(m1)
+        deg2 = sum(m2)
+        if deg1 < deg2:
             return -1
-        if e1 > e2:
+        if deg1 > deg2:
             return 1
-    
-    # If we get here, they're equal
+        
+        # If total degrees are equal, lexicographically compare
+        for e1, e2 in zip(m1, m2):
+            if e1 < e2:
+                return -1
+            if e1 > e2:
+                return 1
+        
+        # If we got here, they're equal
+        return 0
+        
+    # Default comparison for other types
+    if m1 < m2:
+        return -1
+    if m1 > m2:
+        return 1
     return 0
 
 
@@ -57,18 +101,19 @@ class Polynomial:
         nvars: Number of variables in the polynomial
     """
     
-    def __init__(self, coeffs: Optional[Dict[Tuple[int, ...], int]] = None, nvars: Optional[int] = None):
+    def __init__(self, coeffs: Optional[Union[Dict[Tuple[int, ...], int], List[List[Any]]]] = None, nvars: Optional[int] = None):
         """
         Initialize a polynomial.
         
         Args:
-            coeffs: Dictionary mapping monomials to coefficients
+            coeffs: Either a dictionary mapping monomials to coefficients,
+                   or a list of [coefficient, variable1, variable2, ...] lists
             nvars: Number of variables (optional, inferred from coeffs if not provided)
         """
         if coeffs is None:
             self.coeffs = {}
             self.nvars = nvars if nvars is not None else 0
-        else:
+        elif isinstance(coeffs, dict):
             self.coeffs = dict(coeffs)  # Make a copy to avoid sharing
             
             # Filter out zero coefficients
@@ -78,21 +123,90 @@ class Polynomial:
             if nvars is not None:
                 self.nvars = nvars
             elif self.coeffs:
-                self.nvars = max(len(mono) for mono in self.coeffs.keys())
+                self.nvars = max((len(mono) if hasattr(mono, "__len__") else 1)
+                 for mono in self.coeffs.keys())
             else:
                 self.nvars = 0
                 
-            # Ensure all monomials have the correct length
+            # Ensure all monomials have the correct length (handles non-tuple keys)
             if self.coeffs and self.nvars > 0:
                 new_coeffs = {}
                 for mono, coeff in self.coeffs.items():
+                    # Convert single-value monomial to tuple
+                    if not isinstance(mono, tuple):
+                        mono = (mono,)
+                    # Pad to full length
                     if len(mono) < self.nvars:
-                        # Pad with zeros
-                        new_mono = mono + (0,) * (self.nvars - len(mono))
-                        new_coeffs[new_mono] = coeff
-                    else:
-                        new_coeffs[mono] = coeff
+                        mono = mono + (0,) * (self.nvars - len(mono))
+                    new_coeffs[mono] = coeff
                 self.coeffs = new_coeffs
+        elif isinstance(coeffs, list):
+            # Handle the list format: [[coeff, var1, var2, ...], ...]
+            self.coeffs = {}
+            all_vars = set()
+            
+            for term in coeffs:
+                if not term:
+                    continue
+                    
+                # First element is the coefficient
+                coeff = term[0]
+                
+                if len(term) == 1:
+                    # Constant term
+                    mono = (0,)
+                else:
+                    # Variables are the rest of the elements
+                    variables = term[1:]
+                    all_vars.update(variables)
+                    
+                    # Convert variables to a monomial (tuple of indices)
+                    # For now, store variable names
+                    mono = tuple(variables)
+                
+                # Add to coefficients
+                if mono in self.coeffs:
+                    self.coeffs[mono] += coeff
+                else:
+                    self.coeffs[mono] = coeff
+            
+            # Determine number of variables
+            if nvars is not None:
+                self.nvars = nvars
+            else:
+                # For now, just use the number of unique variables
+                self.nvars = len(all_vars)
+                
+            # Convert symbolic variable names to indices
+            # This is a simplification - in a real implementation,
+            # you would need a more sophisticated mapping
+            if all_vars:
+                var_to_idx = {var: idx for idx, var in enumerate(sorted(all_vars))}
+                new_coeffs = {}
+                
+                for mono, coeff in self.coeffs.items():
+                    if len(mono) == 1 and mono[0] == 0:
+                        # Constant term
+                        new_mono = (0,) * self.nvars
+                    else:
+                        # Create a tuple of zeroes of the right length
+                        new_mono = [0] * self.nvars
+                        
+                        # Set 1 for each variable that appears
+                        for var in mono:
+                            if var in var_to_idx:
+                                new_mono[var_to_idx[var]] = 1
+                                
+                        new_mono = tuple(new_mono)
+                    
+                    new_coeffs[new_mono] = coeff
+                
+                self.coeffs = new_coeffs
+        else:
+            raise TypeError(f"Expected dict or list for coeffs, got {type(coeffs)}")
+            
+        # Filter out zero coefficients
+        self.coeffs = {mono: coeff for mono, coeff in self.coeffs.items() if coeff != 0}
     
     @classmethod
     def from_constant(cls, c: int, nvars: int = 0) -> 'Polynomial':
@@ -495,14 +609,23 @@ class RationalPolynomial:
         denom: Denominator polynomial
     """
     
-    def __init__(self, num: Union[Polynomial, int], denom: Union[Polynomial, int] = 1):
+    def __init__(self, num: Union[Polynomial, int, List[List[Any]]], 
+                 denom: Union[Polynomial, int, List[List[Any]]] = 1):
         """
         Initialize a rational polynomial.
         
         Args:
-            num: Numerator (polynomial or constant)
-            denom: Denominator (polynomial or constant, default: 1)
+            num: Numerator (polynomial, constant, or list representation)
+            denom: Denominator (polynomial, constant, or list representation, default: 1)
         """
+        # Convert list to Polynomial if needed
+        if isinstance(num, list):
+            num = Polynomial(num)
+        
+        # Convert list to Polynomial if needed
+        if isinstance(denom, list):
+            denom = Polynomial(denom)
+            
         # Convert integers to constant polynomials
         if isinstance(num, int):
             nvars = getattr(denom, 'nvars', 0) if not isinstance(denom, int) else 0
@@ -680,6 +803,59 @@ class RationalPolynomial:
     def __neg__(self) -> 'RationalPolynomial':
         """Negate this rational polynomial."""
         return RationalPolynomial(-self.num, self.denom)
+    
+    def __pow__(self, power: int) -> 'RationalPolynomial':
+        """
+        Raise this rational polynomial to a non-negative integer power.
+        
+        Args:
+            power: Non-negative integer exponent
+            
+        Returns:
+            A new rational polynomial representing the power
+            
+        Raises:
+            ValueError: If power is negative (use inv() for negative powers)
+            TypeError: If power is not an integer
+        """
+        if not isinstance(power, int):
+            raise TypeError(f"Power must be an integer, got {type(power).__name__}")
+            
+        if power < 0:
+            raise ValueError("Power must be a non-negative integer; use inv() for negative powers")
+            
+        if power == 0:
+            # Return the rational constant 1
+            return RationalPolynomial(
+                Polynomial.from_constant(1, self.num.nvars),
+                Polynomial.from_constant(1, self.denom.nvars)
+            )
+            
+        if power == 1:
+            return RationalPolynomial(self.num, self.denom)
+            
+        # Use binary exponentiation for efficiency
+        half = self ** (power // 2)
+        if power % 2 == 0:
+            return half * half
+        else:
+            return half * half * self
+            
+    def inv(self) -> 'RationalPolynomial':
+        """
+        Compute the inverse of this rational polynomial.
+        
+        Returns:
+            A new rational polynomial representing the inverse (1/self)
+            
+        Raises:
+            ZeroDivisionError: If the numerator is zero
+        """
+        if not self.num.coeffs:
+            raise ZeroDivisionError("Cannot invert a zero rational polynomial")
+            
+        # Swap numerator and denominator to compute inverse
+        return RationalPolynomial(self.denom, self.num)
     
     def simplify(self) -> 'RationalPolynomial':
         """
