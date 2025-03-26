@@ -26,6 +26,10 @@ import numpy as np
 from functools import reduce
 import operator
 
+def expr_as_matrix(op, mv, res_like=None):
+    raise NotImplementedError("expr_as_matrix not implemented in this fork")
+
+
 def kronecker_product(A: np.ndarray, B: np.ndarray) -> np.ndarray:
     """
     Compute the Kronecker product of two matrices.
