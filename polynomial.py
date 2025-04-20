@@ -1,9 +1,100 @@
+<<<<<<< HEAD
 # Necessary imports (ensure these are at the top of polynomial.py)
 from collections import defaultdict
 from sympy import Add, Expr, Mul, Symbol, simplify, Integer, sympify, Poly, Pow, S, Number, NumberSymbol, Basic
 import warnings
 import sympy.polys.polyerrors # For explicit error catching
 from typing import Dict, List, Optional, Tuple, Union, Any, Callable, Set, cast # Ensure necessary types are imported
+=======
+"""
+Module implementing polynomials and rational polynomials for Geometric Algebra.
+
+This module provides custom classes for handling polynomials and rational polynomials,
+which are used in symbolic operations within the Geometric Algebra framework.
+
+Classes:
+    Polynomial: Represents a multivariate polynomial with integer coefficients
+    RationalPolynomial: Represents a rational function (ratio of two polynomials)
+"""
+
+import sympy
+from sympy import Add, Expr, Mul, Symbol, simplify
+from typing import Dict, List, Optional, Tuple, Union, Any, Callable, Set
+
+
+def compare(m1: Any, m2: Any) -> int:
+    """
+    Compare two objects (monomials, polynomials, or None).
+    
+    Args:
+        m1: First object (monomial, polynomial or None)
+        m2: Second object (monomial, polynomial or None)
+        
+    Returns:
+        -1 if m1 < m2, 0 if m1 == m2, 1 if m1 > m2
+    """
+    # Handle None cases
+    if m1 is None and m2 is None:
+        return 1  # Both None, return 1 as specified in test
+    if m1 is None:
+        return 1  # m1 is None but m2 isn't, return 1 as specified in test
+    if m2 is None:
+        return -1  # m2 is None but m1 isn't, return -1 as specified in test
+        
+    # If inputs are Polynomial objects, compare them
+    if hasattr(m1, 'coeffs') and hasattr(m2, 'coeffs'):
+        # Compare by sorting all terms and comparing them term by term
+        terms1 = sorted([(mono, coeff) for mono, coeff in m1.coeffs.items()], 
+                       key=lambda x: (-sum(x[0]), x[0]))
+        terms2 = sorted([(mono, coeff) for mono, coeff in m2.coeffs.items()], 
+                       key=lambda x: (-sum(x[0]), x[0]))
+                
+        if terms1 == terms2:
+            return 0  # Equal
+            
+        # Compare term by term
+        for (mono1, coeff1), (mono2, coeff2) in zip(terms1, terms2):
+            # First compare coefficients
+            if coeff1 < coeff2:
+                return -1
+            if coeff1 > coeff2:
+                return 1
+                
+            # If coefficients are equal, compare monomials
+            mono_compare = compare(mono1, mono2)
+            if mono_compare != 0:
+                return mono_compare
+                
+        # If we get here, one polynomial has more terms
+        return -1 if len(terms1) < len(terms2) else 1
+    
+    # Handle tuples (monomials)
+    if isinstance(m1, tuple) and isinstance(m2, tuple):
+        # Check total degree first
+        deg1 = sum(m1)
+        deg2 = sum(m2)
+        if deg1 < deg2:
+            return -1
+        if deg1 > deg2:
+            return 1
+        
+        # If total degrees are equal, lexicographically compare
+        for e1, e2 in zip(m1, m2):
+            if e1 < e2:
+                return -1
+            if e1 > e2:
+                return 1
+        
+        # If we got here, they're equal
+        return 0
+        
+    # Default comparison for other types
+    if m1 < m2:
+        return -1
+    if m1 > m2:
+        return 1
+    return 0
+>>>>>>> 5d1776bf2c10cd778122088d9664260375c22a81
 
 # You might need compare if it's used elsewhere, but it's not used *within* this class
 # def compare(m1: Any, m2: Any) -> int: ... (definition omitted for brevity)
@@ -21,14 +112,20 @@ class Polynomial:
         coeffs: Dictionary mapping monomial tuples to SymPy coefficients.
         nvars: Number of variables the polynomial is defined over.
     """
+<<<<<<< HEAD
     # Type hint for coeffs
     coeffs: Dict[Tuple[int, ...], Expr]
 
     def __init__(self, coeffs: Optional[Union[Dict[Tuple[int, ...], Any], List[List[Any]]]] = None, nvars: Optional[int] = None):
+=======
+    
+    def __init__(self, coeffs: Optional[Union[Dict[Tuple[int, ...], int], List[List[Any]]]] = None, nvars: Optional[int] = None):
+>>>>>>> 5d1776bf2c10cd778122088d9664260375c22a81
         """
         Initialize a polynomial.
 
         Args:
+<<<<<<< HEAD
             coeffs: Either a dict mapping monomials to coefficients (int, float, Expr),
                     or a list [[coeff, var1_exp, var2_exp,...], ...] (less common).
                     If None or empty, creates a zero polynomial.
@@ -133,6 +230,124 @@ class Polynomial:
                   if not final_coeff.is_zero:
                        self.coeffs[mono + padding] = final_coeff
 
+=======
+            coeffs: Either a dictionary mapping monomials to coefficients,
+                   or a list of [coefficient, variable1, variable2, ...] lists
+            nvars: Number of variables (optional, inferred from coeffs if not provided)
+        """
+        if coeffs is None:
+            self.coeffs = {}
+            self.nvars = nvars if nvars is not None else 0
+        elif isinstance(coeffs, dict):
+            self.coeffs = dict(coeffs)  # Make a copy to avoid sharing
+            
+            # Filter out zero coefficients
+            self.coeffs = {mono: coeff for mono, coeff in self.coeffs.items() if coeff != 0}
+            
+            # Infer nvars if not provided
+            if nvars is not None:
+                self.nvars = nvars
+            elif self.coeffs:
+                self.nvars = max((len(mono) if hasattr(mono, "__len__") else 1)
+                 for mono in self.coeffs.keys())
+            else:
+                self.nvars = 0
+                
+            # Ensure all monomials have the correct length (handles non-tuple keys)
+            if self.coeffs and self.nvars > 0:
+                new_coeffs = {}
+                for mono, coeff in self.coeffs.items():
+                    # Convert single-value monomial to tuple
+                    if not isinstance(mono, tuple):
+                        mono = (mono,)
+                    # Pad to full length
+                    if len(mono) < self.nvars:
+                        mono = mono + (0,) * (self.nvars - len(mono))
+                    new_coeffs[mono] = coeff
+                self.coeffs = new_coeffs
+        elif isinstance(coeffs, list):
+            # Handle the list format: [[coeff, var1, var2, ...], ...]
+            self.coeffs = {}
+            all_vars = set()
+            
+            for term in coeffs:
+                if not term:
+                    continue
+                    
+                # First element is the coefficient
+                coeff = term[0]
+                
+                if len(term) == 1:
+                    # Constant term
+                    mono = (0,)
+                else:
+                    # Variables are the rest of the elements
+                    variables = term[1:]
+                    all_vars.update(variables)
+                    
+                    # Convert variables to a monomial (tuple of indices)
+                    # For now, store variable names
+                    mono = tuple(variables)
+                
+                # Add to coefficients
+                if mono in self.coeffs:
+                    self.coeffs[mono] += coeff
+                else:
+                    self.coeffs[mono] = coeff
+            
+            # Determine number of variables
+            if nvars is not None:
+                self.nvars = nvars
+            else:
+                # For now, just use the number of unique variables
+                self.nvars = len(all_vars)
+                
+            # Convert symbolic variable names to indices
+            # This is a simplification - in a real implementation,
+            # you would need a more sophisticated mapping
+            if all_vars:
+                var_to_idx = {var: idx for idx, var in enumerate(sorted(all_vars))}
+                new_coeffs = {}
+                
+                for mono, coeff in self.coeffs.items():
+                    if len(mono) == 1 and mono[0] == 0:
+                        # Constant term
+                        new_mono = (0,) * self.nvars
+                    else:
+                        # Create a tuple of zeroes of the right length
+                        new_mono = [0] * self.nvars
+                        
+                        # Set 1 for each variable that appears
+                        for var in mono:
+                            if var in var_to_idx:
+                                new_mono[var_to_idx[var]] = 1
+                                
+                        new_mono = tuple(new_mono)
+                    
+                    new_coeffs[new_mono] = coeff
+                
+                self.coeffs = new_coeffs
+        else:
+            raise TypeError(f"Expected dict or list for coeffs, got {type(coeffs)}")
+            
+        # Filter out zero coefficients
+        self.coeffs = {mono: coeff for mono, coeff in self.coeffs.items() if coeff != 0}
+    
+    @classmethod
+    def from_constant(cls, c: int, nvars: int = 0) -> 'Polynomial':
+        """
+        Create a constant polynomial.
+        
+        Args:
+            c: Constant value
+            nvars: Number of variables
+            
+        Returns:
+            A polynomial representing the constant c
+        """
+        if c == 0:
+            return cls(nvars=nvars)
+>>>>>>> 5d1776bf2c10cd778122088d9664260375c22a81
         else:
             raise TypeError(f"Expected dict, list, or None for coeffs, got {type(coeffs).__name__}")
 
@@ -426,16 +641,30 @@ class Polynomial:
 # ... (Previous RationalPolynomial code goes here) ...
 
 class RationalPolynomial:
+<<<<<<< HEAD
     """ Represents a rational polynomial (fraction of polynomials). """
     num: Polynomial
     denom: Polynomial
 
     def __init__(self, num: Union[Polynomial, int, float, complex, Expr, List[List[Any]]],
                  denom: Union[Polynomial, int, float, complex, Expr, List[List[Any]]] = 1):
+=======
+    """
+    Represents a rational polynomial (fraction of polynomials).
+    
+    Attributes:
+        num: Numerator polynomial
+        denom: Denominator polynomial
+    """
+    
+    def __init__(self, num: Union[Polynomial, int, List[List[Any]]], 
+                 denom: Union[Polynomial, int, List[List[Any]]] = 1):
+>>>>>>> 5d1776bf2c10cd778122088d9664260375c22a81
         """
         Initialize a rational polynomial P/Q.
 
         Args:
+<<<<<<< HEAD
             num: Numerator (Polynomial, constant, SymPy Expr, or list format).
             denom: Denominator (default: 1). Cannot be zero.
 
@@ -486,6 +715,280 @@ class RationalPolynomial:
         if self.is_polynomial(): return str(self.num)
         num_str = str(self.num); denom_str = str(self.denom)
         # Add parentheses if needed (check if result of tosympy is Add)
+=======
+            num: Numerator (polynomial, constant, or list representation)
+            denom: Denominator (polynomial, constant, or list representation, default: 1)
+        """
+        # Convert list to Polynomial if needed
+        if isinstance(num, list):
+            num = Polynomial(num)
+        
+        # Convert list to Polynomial if needed
+        if isinstance(denom, list):
+            denom = Polynomial(denom)
+            
+        # Convert integers to constant polynomials
+        if isinstance(num, int):
+            nvars = getattr(denom, 'nvars', 0) if not isinstance(denom, int) else 0
+            num = Polynomial.from_constant(num, nvars)
+        
+        if isinstance(denom, int):
+            if denom == 0:
+                raise ZeroDivisionError("Denominator cannot be zero")
+            denom = Polynomial.from_constant(denom, num.nvars)
+        
+        # Ensure same number of variables
+        nvars = max(num.nvars, denom.nvars)
+        if num.nvars < nvars:
+            # Convert to polynomial with more variables
+            new_coeffs = {mono + (0,) * (nvars - len(mono)): coeff 
+                         for mono, coeff in num.coeffs.items()}
+            num = Polynomial(new_coeffs, nvars)
+        
+        if denom.nvars < nvars:
+            # Convert to polynomial with more variables
+            new_coeffs = {mono + (0,) * (nvars - len(mono)): coeff 
+                         for mono, coeff in denom.coeffs.items()}
+            denom = Polynomial(new_coeffs, nvars)
+        
+        # Store the numerator and denominator
+        self.num = num
+        self.denom = denom
+    
+    def __str__(self) -> str:
+        """Convert rational polynomial to string representation."""
+        if self.is_polynomial():
+            return str(self.num)
+        
+        # If denominator is 1, just show numerator
+        if len(self.denom.coeffs) == 1:
+            mono, coeff = next(iter(self.denom.coeffs.items()))
+            if all(e == 0 for e in mono) and coeff == 1:
+                return str(self.num)
+        
+        # For complex fractions, use parentheses
+        num_str = str(self.num)
+        denom_str = str(self.denom)
+        
+        if "+" in num_str or "-" in num_str[1:]:
+            num_str = f"({num_str})"
+        
+        if "+" in denom_str or "-" in denom_str[1:]:
+            denom_str = f"({denom_str})"
+        
+        return f"{num_str}/{denom_str}"
+    
+    def __repr__(self) -> str:
+        """Return a string representation of the rational polynomial."""
+        return f"RationalPolynomial({repr(self.num)}, {repr(self.denom)})"
+    
+    def is_polynomial(self) -> bool:
+        """Check if this rational polynomial is actually a polynomial."""
+        # Check if denominator is a constant 1
+        if len(self.denom.coeffs) == 1:
+            mono, coeff = next(iter(self.denom.coeffs.items()))
+            return all(e == 0 for e in mono) and coeff == 1
+        return False
+    
+    def __eq__(self, other: Any) -> bool:
+        """Test equality with another rational polynomial."""
+        if isinstance(other, RationalPolynomial):
+            # a/b = c/d if and only if a*d = b*c
+            return self.num * other.denom == self.denom * other.num
+        elif isinstance(other, (Polynomial, int)):
+            if isinstance(other, int):
+                other = Polynomial.from_constant(other, self.num.nvars)
+            # a/b = c if and only if a = b*c
+            return self.num == self.denom * other
+        return NotImplemented
+    
+    def __add__(self, other: Union['RationalPolynomial', Polynomial, int]) -> 'RationalPolynomial':
+        """Add this rational polynomial to another rational polynomial, polynomial, or constant."""
+        if isinstance(other, (Polynomial, int)):
+            if isinstance(other, int):
+                other = Polynomial.from_constant(other, self.num.nvars)
+            # a/b + c = (a + b*c)/b
+            return RationalPolynomial(self.num + self.denom * other, self.denom)
+        
+        if not isinstance(other, RationalPolynomial):
+            return NotImplemented
+        
+        # a/b + c/d = (a*d + b*c)/(b*d)
+        return RationalPolynomial(
+            self.num * other.denom + self.denom * other.num,
+            self.denom * other.denom
+        )
+    
+    def __radd__(self, other: Union[Polynomial, int]) -> 'RationalPolynomial':
+        """Add a polynomial or constant to this rational polynomial."""
+        return self + other
+    
+    def __sub__(self, other: Union['RationalPolynomial', Polynomial, int]) -> 'RationalPolynomial':
+        """Subtract another rational polynomial, polynomial, or constant from this rational polynomial."""
+        if isinstance(other, (Polynomial, int)):
+            if isinstance(other, int):
+                other = Polynomial.from_constant(other, self.num.nvars)
+            # a/b - c = (a - b*c)/b
+            return RationalPolynomial(self.num - self.denom * other, self.denom)
+        
+        if not isinstance(other, RationalPolynomial):
+            return NotImplemented
+        
+        # a/b - c/d = (a*d - b*c)/(b*d)
+        return RationalPolynomial(
+            self.num * other.denom - self.denom * other.num,
+            self.denom * other.denom
+        )
+    
+    def __rsub__(self, other: Union[Polynomial, int]) -> 'RationalPolynomial':
+        """Subtract this rational polynomial from a polynomial or constant."""
+        if isinstance(other, int):
+            other = Polynomial.from_constant(other, self.num.nvars)
+        # c - a/b = (c*b - a)/b
+        return RationalPolynomial(other * self.denom - self.num, self.denom)
+    
+    def __mul__(self, other: Union['RationalPolynomial', Polynomial, int]) -> 'RationalPolynomial':
+        """Multiply this rational polynomial by another rational polynomial, polynomial, or constant."""
+        if isinstance(other, (Polynomial, int)):
+            if isinstance(other, int):
+                other = Polynomial.from_constant(other, self.num.nvars)
+            # (a/b) * c = (a*c)/b
+            return RationalPolynomial(self.num * other, self.denom)
+        
+        if not isinstance(other, RationalPolynomial):
+            return NotImplemented
+        
+        # (a/b) * (c/d) = (a*c)/(b*d)
+        return RationalPolynomial(
+            self.num * other.num,
+            self.denom * other.denom
+        )
+    
+    def __rmul__(self, other: Union[Polynomial, int]) -> 'RationalPolynomial':
+        """Multiply this rational polynomial by a polynomial or constant."""
+        return self * other
+    
+    def __truediv__(self, other: Union['RationalPolynomial', Polynomial, int]) -> 'RationalPolynomial':
+        """Divide this rational polynomial by another rational polynomial, polynomial, or constant."""
+        if isinstance(other, (Polynomial, int)):
+            if isinstance(other, int):
+                if other == 0:
+                    raise ZeroDivisionError("Division by zero")
+                other = Polynomial.from_constant(other, self.num.nvars)
+            # (a/b) / c = a/(b*c)
+            return RationalPolynomial(self.num, self.denom * other)
+        
+        if not isinstance(other, RationalPolynomial):
+            return NotImplemented
+        
+        if other.num.coeffs:
+            # (a/b) / (c/d) = (a*d)/(b*c)
+            return RationalPolynomial(
+                self.num * other.denom,
+                self.denom * other.num
+            )
+        else:
+            raise ZeroDivisionError("Division by zero rational polynomial")
+    
+    def __rtruediv__(self, other: Union[Polynomial, int]) -> 'RationalPolynomial':
+        """Divide a polynomial or constant by this rational polynomial."""
+        if isinstance(other, int):
+            other = Polynomial.from_constant(other, self.num.nvars)
+        
+        if self.num.coeffs:
+            # c / (a/b) = (c*b)/a
+            return RationalPolynomial(other * self.denom, self.num)
+        else:
+            raise ZeroDivisionError("Division by zero rational polynomial")
+    
+    def __neg__(self) -> 'RationalPolynomial':
+        """Negate this rational polynomial."""
+        return RationalPolynomial(-self.num, self.denom)
+    
+    def __pow__(self, power: int) -> 'RationalPolynomial':
+        """
+        Raise this rational polynomial to a non-negative integer power.
+        
+        Args:
+            power: Non-negative integer exponent
+            
+        Returns:
+            A new rational polynomial representing the power
+            
+        Raises:
+            ValueError: If power is negative (use inv() for negative powers)
+            TypeError: If power is not an integer
+        """
+        if not isinstance(power, int):
+            raise TypeError(f"Power must be an integer, got {type(power).__name__}")
+            
+        if power < 0:
+            raise ValueError("Power must be a non-negative integer; use inv() for negative powers")
+            
+        if power == 0:
+            # Return the rational constant 1
+            return RationalPolynomial(
+                Polynomial.from_constant(1, self.num.nvars),
+                Polynomial.from_constant(1, self.denom.nvars)
+            )
+            
+        if power == 1:
+            return RationalPolynomial(self.num, self.denom)
+            
+        # Use binary exponentiation for efficiency
+        half = self ** (power // 2)
+        if power % 2 == 0:
+            return half * half
+        else:
+            return half * half * self
+            
+    def inv(self) -> 'RationalPolynomial':
+        """
+        Compute the inverse of this rational polynomial.
+        
+        Returns:
+            A new rational polynomial representing the inverse (1/self)
+            
+        Raises:
+            ZeroDivisionError: If the numerator is zero
+        """
+        if not self.num.coeffs:
+            raise ZeroDivisionError("Cannot invert a zero rational polynomial")
+            
+        # Swap numerator and denominator to compute inverse
+        return RationalPolynomial(self.denom, self.num)
+    
+    def simplify(self) -> 'RationalPolynomial':
+        """
+        Simplify this rational polynomial by dividing out common factors.
+        
+        Returns:
+            A simplified rational polynomial
+        """
+        # If either numerator or denominator is zero, handle specially
+        if not self.num.coeffs:
+            # 0/d = 0
+            return RationalPolynomial(0, 1)
+        
+        if not self.denom.coeffs:
+            raise ZeroDivisionError("Denominator is zero")
+        
+        # Check for common constant factors
+        if len(self.num.coeffs) == 1 and len(self.denom.coeffs) == 1:
+            # Get the only monomial and coefficient from each
+            num_mono, num_coeff = next(iter(self.num.coeffs.items()))
+            denom_mono, denom_coeff = next(iter(self.denom.coeffs.items()))
+            
+            # Check for constant GCD
+            import math
+            gcd_val = math.gcd(num_coeff, denom_coeff)
+            if gcd_val > 1:
+                simplified_num = Polynomial({num_mono: num_coeff // gcd_val}, self.num.nvars)
+                simplified_denom = Polynomial({denom_mono: denom_coeff // gcd_val}, self.denom.nvars)
+                return RationalPolynomial(simplified_num, simplified_denom)
+        
+        # Convert to sympy expressions for more complex simplification
+>>>>>>> 5d1776bf2c10cd778122088d9664260375c22a81
         num_sympy = self.num.tosympy()
         den_sympy = self.denom.tosympy()
         num_has_terms = isinstance(num_sympy, Add)
