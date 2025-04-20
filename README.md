@@ -1,6 +1,6 @@
 # Kingdon Geometric Algebra Library (Enhanced Fork)
 
-![Version](https://img.shields.io/badge/version-0.2.0-blue)
+![Version](https://img.shields.io/badge/version-0.3.0-blue)
 ![Python](https://img.shields.io/badge/python-3.7%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -30,6 +30,7 @@ This fork includes several key enhancements over the original Kingdon library:
 - **Performance Optimization**: Smarter caching and more efficient implementation of core operations
 - **New Convenience Methods**: Added intuitive factory methods for common geometric entities
 - **Type Annotations**: Extensive typing for better IDE support and code validation
+- ****Changed Tests**: Force tests to go through API instead of direct calls to script - Focus on users not developers
 
 ## Installation
 
