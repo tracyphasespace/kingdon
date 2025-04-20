@@ -24,6 +24,7 @@ from sympy import symbols
 # Core components
 from kingdon.algebra import Algebra
 from kingdon.multivector import MultiVector
+from .operator_dict import AlgebraError # <--- ADDED THIS LINE
 
 # Factory functions for easy object creation
 from kingdon.ga_factory import (
@@ -75,3 +76,24 @@ def STA() -> Algebra:
 def version() -> str:
     """Return the version of the Kingdon library."""
     return __version__
+
+# Optional: Define __all__ to control `from kingdon import *`
+__all__ = [
+    'Algebra',
+    'MultiVector',
+    'AlgebraError', # Add AlgebraError here too
+    'create_vector',
+    'create_bivector',
+    'create_scalar',
+    'create_trivector',
+    'create_pseudoscalar',
+    'create_blade',
+    'matrix_rep',
+    'PGA2D', 'PGA3D', 'CGA2D', 'CGA3D', 'VGA3D', 'STA',
+    'version',
+    'symbols' # Re-export symbols if desired
+]
+
+# Conditionally add GraphWidget to __all__ if imported
+if 'GraphWidget' in locals():
+    __all__.append('GraphWidget')
