@@ -1,7 +1,8 @@
 import pytest
 import sympy
 # Assuming Polynomial and RationalPolynomial are now using SymPy coefficients
-from kingdon.polynomial import Polynomial, RationalPolynomial, compare
+# Removed 'compare' from this import
+from kingdon.polynomial import Polynomial, RationalPolynomial
 from sympy import symbols, Integer, Add, Mul, Pow, S # Import necessary SymPy elements
 
 from sympy import sympify
@@ -41,25 +42,9 @@ def RP(num_expr, den_expr=1, vars=None):
      return RationalPolynomial(num_poly, den_poly)
 
 
-# --- Test Compare Function ---
-# Note: compare function might be less relevant if relying purely on Polynomial.__eq__
-# Keeping the test structure but updating initialization
-# @pytest.mark.xfail(reason="Feedback: Library calculation bug OR Test needs update") # Keep xfail until compare logic verified with symbolic Polynomials
-@pytest.mark.parametrize("a, b, expected_comparison_result", [
-    # Using Polynomial.fromsympy for initialization
-    (P(x + 2*y + 3*z, [x, y, z]), P(x + 2*y + 3*z, [x, y, z]), 0),
-    (P(x + 2*y + 3*z, [x, y, z]), P(x + 2*y + 4*z, [x, y, z]), -1), # 3z < 4z assuming some order
-    (P(x + 2*y + 4*z, [x, y, z]), P(x + 2*y + 3*z, [x, y, z]), 1),
-    (P(x + 2*y + 4*z, [x, y, z]), None, -1), # Existing poly vs None
-    (None, P(x + 2*y + 4*z, [x, y, z]), 1), # None vs Existing poly
-    (None, None, 1), # None vs None
-], ids=[
-    "equal_poly", "a_less_than_b", "a_greater_than_b", "a_vs_none", "none_vs_b", "none_vs_none"
-])
-def test_compare_api(a, b, expected_comparison_result):
-    """ Tests the `compare` utility function API (if still used/relevant). """
-    # This test might need adjustment based on how compare handles SymPy coeffs
-    assert compare(a, b) == expected_comparison_result
+# --- Test Compare Function REMOVED ---
+# The test_compare_api function and its parametrize decorator
+# have been removed as the 'compare' function does not exist.
 
 
 # --- Test Arithmetic Operators ---

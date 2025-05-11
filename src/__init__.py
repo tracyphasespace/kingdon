@@ -77,7 +77,6 @@ def version() -> str:
     """Return the version of the Kingdon library."""
     return __version__
 
-
 # Optional: Define __all__ to control `from kingdon import *`
 __all__ = [
     'Algebra',
@@ -98,5 +97,3 @@ __all__ = [
 # Conditionally add GraphWidget to __all__ if imported
 if 'GraphWidget' in locals():
     __all__.append('GraphWidget')
-
-

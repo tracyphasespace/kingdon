@@ -325,53 +325,35 @@ def test_polynomial_integration(vga3d):
     # Check the coefficient of e12 in the result using `.coeffs` property API
     # Note: key for e12 is 3 (binary)
     assert mv_prod.coeffs[3] == expected_prod_coeff
-
-
+    
 def test_multivector_numpy_object_array(vga3d):
     """
     Tests creating and interacting with NumPy object arrays containing MultiVectors.
     Focuses on accessing elements and verifying their properties via the MV API.
     """
     # Create individual multivectors for testing using the API
-    mv1 = 1*vga3d.blades.e1 + 2*vga3d.blades.e2
-    mv2 = 3*vga3d.blades.e1 + 4*vga3d.blades.e2
-    mv3 = 5*vga3d.blades.e1 + 6*vga3d.blades.e2
+    mv1 = 1 * vga3d.blades.e1 + 2 * vga3d.blades.e2
+    mv2 = 3 * vga3d.blades.e1 + 4 * vga3d.blades.e2
+    mv3 = 5 * vga3d.blades.e1 + 6 * vga3d.blades.e2
 
-    # Store in a list first
     mv_list = [mv1, mv2, mv3]
-
-    # Create the numpy array with dtype=object - interaction with NumPy API
     mvs_array = np.array(mv_list, dtype=object)
 
-    # --- Assertions ---
-    # Verify the array's shape and dtype via NumPy API
-    # Changed shape assertion to (3, 1) based on feedback
-    # Reverted based on current fetched file still using (3,) and feedback likely inconsistent
-    assert mvs_array.shape == (3, 1)
+    # 1) Verify the array's shape and dtype
+    assert mvs_array.shape == (3,)
     assert mvs_array.dtype == object
 
-    # Access elements from numpy array and verify type and content using MultiVector API
+    # 2) Access elements and verify via the MultiVector API
     for i, expected_mv in enumerate(mv_list):
-        # Access element assuming shape (3,)
-        item = mvs_array[i, 0]
+        item = mvs_array[i]
         assert isinstance(item, MultiVector), f"Item at index {i} is not a MultiVector"
-        # Check equality using MultiVector's __eq__ API
         assert item == expected_mv, f"Item at index {i} does not match expected value"
-        # Check specific components using MultiVector's attribute access API
-        assert item.e1 == (i * 2) + 1 # Access component e1 via API
-        assert item.e2 == (i * 2) + 2 # Access component e2 via API
+        assert item.e1 == (i * 2) + 1
+        assert item.e2 == (i * 2) + 2
 
-    # Test broadcasting a simple operation (scalar multiplication) across the object array
-    try:
-        # Perform operation using NumPy/Python API
-        scaled_array = mvs_array * 10
-        # Check results using MultiVector API
-        assert scaled_array.shape == (3,1)
-        assert scaled_array.dtype == object # Should still be object array
-        assert isinstance(scaled_array[0], MultiVector)
-        assert scaled_array[0, 0] == mv1 * 10 # Verify using MV API equality
-        assert scaled_array[1, 0] == mv2 * 10
-        assert scaled_array[2, 0] == mv3 * 10
-    except Exception as e:
-        # Catch potential errors during the broadcasted operation
-        pytest.fail(f"Scalar multiplication broadcast failed for object array: {e}")
+    # 3) Test broadcasting scalar multiplication across the object array
+    scaled = mvs_array * 10
+    assert scaled.shape == (3,)
+    assert scaled.dtype == object
+    for i, expected_mv in enumerate(mv_list):
+        assert scaled[i] == expected_mv * 10
