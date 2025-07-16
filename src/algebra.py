@@ -25,9 +25,9 @@ from sympy import sympify
 # and then use sympy.sympify(...)
 
 
-from kingdon.operator_dict import OperatorDict, UnaryOperatorDict, BladeDict, Registry, AlgebraError
-from kingdon.multivector   import MultiVector
-from kingdon.codegen       import CodegenOutput
+from .operator_dict import OperatorDict, UnaryOperatorDict, BladeDict, Registry, AlgebraError
+from .multivector   import MultiVector
+from .codegen       import CodegenOutput
 
 # Typing Imports
 from typing import List, Dict, Optional, Any, Tuple, Callable, Union, Set, Type, TypeVar, cast, TYPE_CHECKING, ClassVar, Sequence # Added Sequence
@@ -128,13 +128,111 @@ class Algebra:
         'outertan': {'codegen': 'codegen_outertan', 'cls': UnaryOperatorDict},
     }
 
+    # You need to ADD this method to the Algebra class in the new file.
+
+    def _initialize_blade_dictionary(self, BladeDict_cls, MultiVector_cls):
+        """
+        Initializes the dictionary of basis blades and the pss attribute.
+        """
+        # Blades are not precomputed for algebras larger than 6D.
+        # Note: The original BladeDict from Originalalgebra.py is what is needed here.
+        self.blades = BladeDict_cls(algebra=self, lazy=self.d > 6)
+
+        # The pss is the blade with the highest grade.
+        pss_key = (1 << self.d) - 1
+        self.pss = self.blades[self.bin2canon[pss_key]]
+    
+    
+    # ADD THIS METHOD to the Algebra class in algebra.py
+
+    def _canonical_key_sort_func(self) -> Callable[[int], Tuple[int, float]]:
+        """
+        Returns a callable that can be used as a sort key to sort basis blade
+        keys in canonical order (by grade, then by value).
+        """
+        # The key function uses the pre-computed map for efficiency.
+        # We return the .get method of the dict, which is a callable.
+        return self._key_to_grade_index_map.get
+    
+    
+    # In algebra.py, inside the Algebra class
+
+    def _parse_composite_custom_key(self, basis_blade: str) -> bool:
+        """
+        Placeholder for parsing composite custom basis names.
+        Currently returns False, indicating it did not handle the key.
+        """
+        # This is a placeholder. A full implementation would check if `basis_blade`
+        # can be formed by concatenating names from `self.basis_names`.
+        return False
+    
+    # ADD THIS METHOD to the Algebra class in algebra.py
+
+    def _compile_gp_func(self) -> Callable[[int, int], Tuple[int, int]]:
+        """
+        Creates and returns a JIT-compilable or simple Python function for the
+        geometric product of two basis blade keys.
+        
+        This function is a performance-critical part for operations like
+        building the Cayley table.
+        """
+        # We can use a simple lambda here because the self.signs dictionary
+        # is already pre-computed and available in the closure.
+        # It returns a tuple of (resulting_key, sign).
+        gp_func = lambda i, j: (i ^ j, self.signs.get((i, j), 0))
+
+        # If a JIT wrapper like Numba is available on the algebra, wrap it.
+        # This provides a significant performance boost.
+        if self.wrapper and callable(self.wrapper):
+            try:
+                # Attempt to wrap the function. This might fail if the wrapper
+                # (e.g., Numba) doesn't support dict lookups, but for basic
+                # operations, this pattern is common. If it fails, we fall
+                # back to the plain Python version.
+                return self.wrapper(gp_func)
+            except Exception as e:
+                log.warning(f"Could not apply JIT wrapper to gp_func, falling back to pure Python. Error: {e}")
+                return gp_func
+        else:
+            # Return the plain Python function if no wrapper is specified.
+            return gp_func
+    
+    # ADD THIS METHOD to the Algebra class in algebra.py
+
+    def _create_registry(self):
+        """
+        Initializes the operator dictionaries (e.g., gp, sw) and populates
+        the main registry.
+        """
+        from . import codegen  # Local import to get codegen functions
+
+        self.registry = {}
+        for op_name, meta in self._operator_metadata.items():
+            # Get the codegen function from the codegen module by its string name
+            codegen_func = getattr(codegen, meta['codegen'], None)
+            if codegen_func is None:
+                log.warning(f"Codegen function '{meta['codegen']}' for operator '{op_name}' not found. Skipping.")
+                continue
+
+            # Get the OperatorDict class (e.g., OperatorDict, UnaryOperatorDict)
+            op_cls = meta['cls']
+
+            # Create the instance
+            op_instance = op_cls(name=op_name, codegen=codegen_func, algebra=self)
+            
+            # Set the operator on the algebra instance (e.g., self.gp = ...)
+            setattr(self, op_name, op_instance)
+            # Add it to the main registry dictionary
+            self.registry[op_name] = op_instance
+    
+    
     # Add _grade_index_map caching to __post_init__ for efficiency
     def __post_init__(self) -> None:
         # Imports moved here to avoid potential circularity at module level
         # Need to handle potential import errors if modules aren't found
         try:
-            from kingdon.multivector import MultiVector
-            from kingdon.operator_dict import BladeDict
+            from .multivector import MultiVector
+            from .operator_dict import BladeDict
         except ImportError as e:
              log.error(f"Failed to import MultiVector or BladeDict in Algebra.__post_init__: {e}")
              # Depending on severity, raise error or try to continue with limited functionality
@@ -165,10 +263,12 @@ class Algebra:
         self._initialize_blade_dictionary(BladeDict, MultiVector) # Sets self.pss
         self._create_registry()
         self._gp_func = self._compile_gp_func()
-
-
+        
+        
+        
     # --- Setup Methods ---
-    # (No changes needed in setup methods for this step)
+    
+    
     def _setup_signature(self) -> None:
         if self.signature is not None:
             if not isinstance(self.signature, (list, tuple, np.ndarray)): raise TypeError("Explicit signature must be a list, tuple, or numpy array.")
@@ -198,686 +298,340 @@ class Algebra:
                 key = sum(1 << i for i in combo_indices); sorted_canon_indices = sorted([i + self.start_index for i in combo_indices])
                 default_canon_name = f"e{''.join(map(str, sorted_canon_indices))}"; self.canon2bin[default_canon_name] = key; self.bin2canon[key] = default_canon_name
                 subscript = "".join(map(str, sorted_canon_indices)); pretty_sub = subscript.translate(unicode_map); self._bin2canon_prettystr[key] = f"{self.pretty_blade}{pretty_sub}"
-        if self.start_index == 0: self.canon2bin["e0"] = 0 # Ensure e0 mapping if starting at 0
-
-    def _blade2canon(self, basis_blade: str) -> Tuple[str, int]:
-        if basis_blade == "e" or (self.start_index == 0 and basis_blade == "e0"): return "e", 0
-        match_default = re.match(r'^e([0-9]+)$', basis_blade)
-        if match_default:
-            indices_str = match_default.group(1)
-            try: indices = [int(c) for c in indices_str]
-            except ValueError as e: raise ValueError(f"Invalid index character in blade string: {basis_blade}. {e}") from e
-            if len(set(indices)) != len(indices): raise ValueError(f"Duplicate indices in blade name: {basis_blade}")
-            min_idx, max_idx = self.start_index, self.start_index + self.d - 1
-            if not all(min_idx <= i <= max_idx for i in indices): raise ValueError(f"Indices in '{basis_blade}' must be between {min_idx} and {max_idx}")
-            sorted_indices = sorted(indices); canonical_name = f"e{''.join(map(str, sorted_indices))}"
-            # Check if canonical name exists before calculating swaps (optimization/validation)
-            if canonical_name not in self.canon2bin and canonical_name != 'e':
-                 # This case implies indices formed a valid combination, but it wasn't generated? Should not happen.
-                 raise ValueError(f"Internal error: Canonical name '{canonical_name}' for indices {sorted_indices} not found in algebra.")
-            # Calculate swaps using bubble sort logic (inefficient but simple)
-            current_indices = list(indices); swaps = 0; n = len(current_indices)
-            for i in range(n):
-                for j in range(n - 1 - i):
-                    if current_indices[j] > current_indices[j+1]: current_indices[j], current_indices[j+1] = current_indices[j+1], current_indices[j]; swaps += 1
-            return canonical_name, swaps
-        elif self.basis_names:
-            matched_names = []
-            remaining_blade = basis_blade
-            # Sort custom basis names by length descending to match longest first
-            sorted_basis_names = sorted(self.basis_names, key=len, reverse=True)
-            while remaining_blade:
-                found_match = False
-                for name in sorted_basis_names:
-                    if remaining_blade.startswith(name):
-                        matched_names.append(name)
-                        remaining_blade = remaining_blade[len(name):]
-                        found_match = True
-                        break
-                if not found_match:
-                    raise ValueError(f"Invalid blade string '{basis_blade}': Contains characters/substrings not matching custom basis names {self.basis_names}")
-            if len(set(matched_names)) != len(matched_names): raise ValueError(f"Duplicate basis names in blade string: {basis_blade}")
-            # Sort matched custom names based on their original index order
-            name_to_index = {name: i for i, name in enumerate(self.basis_names)}
-            sorted_matched_names = sorted(matched_names, key=lambda name: name_to_index[name])
-            # Construct canonical name by joining sorted custom names
-            # NOTE: This assumes concatenation is the desired canonical form for custom names.
-            # A more robust system might map combined custom names to a standard 'e...' form.
-            # For now, we map back to the 'e<indices>' form based on the keys.
-            try:
-                 combined_key = reduce(operator.xor, (self.canon2bin[n] for n in sorted_matched_names))
-                 canonical_name = self.bin2canon.get(combined_key)
-                 if canonical_name is None:
-                     # Fallback if direct key lookup fails (should not happen if setup is correct)
-                     log.warning(f"Could not find canonical name for key {combined_key} from custom names {sorted_matched_names}. Using key directly.")
-                     canonical_name = f"key_{combined_key}" # Placeholder
-            except KeyError as e:
-                raise ValueError(f"Internal error: Basis name '{e}' used in '{basis_blade}' not found in algebra's canon2bin mapping.")
-
-            # Calculate swaps
-            current_names = list(matched_names)
-            swaps = 0; n = len(current_names)
-            for i in range(n):
-                for j in range(n - 1 - i):
-                    if name_to_index[current_names[j]] > name_to_index[current_names[j+1]]:
-                        current_names[j], current_names[j+1] = current_names[j+1], current_names[j]
-                        swaps += 1
-            return canonical_name, swaps
-        else:
-             # Check if it's a pre-existing canonical name (e.g., "e12")
-             if basis_blade in self.canon2bin: return basis_blade, 0
-             # Otherwise, invalid format
-             raise ValueError(f"Invalid basis blade format: '{basis_blade}'. Use 'e' + indices or provide custom basis_names.")
+        
+        # Explicitly handle e0 mapping if starting at 0, which might not be a basis vector
+        if self.start_index == 0 and "e0" not in self.canon2bin:
+            # Find which basis vector corresponds to index 0
+            zero_idx_vector_key = 1 << (0 - self.start_index)
+            if self.signature[0] == 0: # If e0 is null, it's special
+                self.canon2bin["e0"] = zero_idx_vector_key
+            # Else, if it's not null, 'e0' can just be an alias for the first vector
+            # However, the universal alias in _blade2canon handles 'e0' -> scalar, which is often desired.
+            # This part of the logic is subtle. The key is that `_blade2canon` handles the *input*,
+            # and this part handles the *canonical representation*.
 
     def _precompute_grade_indices(self) -> None:
+        """
+        Fills self.indices_for_grades with all basis indices for each grade.
+        """
         self.indices_for_grades = defaultdict(list)
-        # Use range(len(self)) which is 0 to 2^d - 1
         all_keys_iterable = range(len(self))
         key_func = lambda k: bin(k).count('1')
-        # Groupby requires sorted input
         all_keys_sorted = sorted(all_keys_iterable, key=key_func)
         for grade, group in groupby(all_keys_sorted, key=key_func):
-            # Store as tuple key (grade,)
             self.indices_for_grades[(grade,)] = list(group)
 
     def _compute_multiplication_signs(self) -> None:
+        """
+        Precomputes the sign of the geometric product for all pairs of basis blades.
+        The result is stored in self.signs.
+        """
         self.signs = {};
-        algebra_len = len(self) # 2**d
+        algebra_len = len(self)
         for i in range(algebra_len):
             for j in range(algebra_len):
-                if i == 0 or j == 0: self.signs[(i, j)] = 1; continue
+                if i == 0 or j == 0:
+                    self.signs[(i, j)] = 1
+                    continue
+                
+                # Decompose basis blades into their vector indices
                 i_indices = {k for k in range(self.d) if (i >> k) & 1}
                 j_indices = {k for k in range(self.d) if (j >> k) & 1}
+                
                 common_indices = i_indices.intersection(j_indices)
                 i_only_indices = i_indices.difference(common_indices)
-                j_only_indices = j_indices.difference(common_indices)
-                # Calculate swaps needed to bring common elements together and sort remaining
-                swaps = 0
-                for i_idx in i_only_indices:
-                    swaps += sum(1 for j_idx in j_only_indices if i_idx > j_idx) # Count j's that should be before i
-
+                
+                # Count swaps required to move all elements of i_only_indices past j_indices
+                swaps = sum(1 for i_idx in i_only_indices for j_idx in j_indices if i_idx > j_idx)
+                
                 sign = (-1)**swaps
+                
+                # Multiply by the squares of common basis vectors
                 for k in common_indices:
-                     if k >= len(self.signature): # Check bounds
-                          log.error(f"Index {k} out of bounds for signature length {len(self.signature)} when calculating sign for ({i}, {j}).")
-                          sign = 0; break # Treat as error / zero product
-                     sig_val = self.signature[k]
-                     if sig_val == 0: sign = 0; break
-                     sign *= sig_val
-                # Store only non-zero results, can infer zero otherwise
-                if sign != 0: self.signs[(i, j)] = int(sign)
+                    sig_val = self.signature[k]
+                    if sig_val == 0:
+                        sign = 0; break
+                    sign *= sig_val
+                
+                if sign != 0:
+                    self.signs[(i, j)] = int(sign)
 
-    def _initialize_blade_dictionary(self, BladeDictClass: Type['BladeDict'], MVClass: Type['MultiVector']) -> None:
-        # Lazy initialization heuristic
-        lazy_init = hasattr(self, 'd') and self.d > 6
-        self.blades = BladeDictClass(self, lazy=lazy_init)
-        # Initialize Pseudoscalar (pss)
-        if hasattr(self, 'd') and self.d >= 0:
-            if self.d == 0: # Special case for d=0 algebra (scalars only)
-                 pseudoscalar_key = 0
-                 pseudoscalar_name = "e"
-            else:
-                 pseudoscalar_key = (1 << self.d) - 1
-                 pseudoscalar_name = self.bin2canon.get(pseudoscalar_key)
-
-            if pseudoscalar_name:
-                 # Access via BladeDict __getitem__ to trigger creation if lazy
-                 try:
-                      self.pss = self.blades[pseudoscalar_name]
-                 except Exception as e:
-                      log.error(f"Failed to get/create pss '{pseudoscalar_name}' via BladeDict: {e}. Creating manually.")
-                      # Manually create if BladeDict access fails
-                      self.pss = MVClass.fromkeysvalues(self, keys=(pseudoscalar_key,), values=[1])
-            else:
-                log.warning(f"Could not find canonical name for pseudoscalar key {pseudoscalar_key}. Creating manually.")
-                self.pss = MVClass.fromkeysvalues(self, keys=(pseudoscalar_key,), values=[1])
-        else:
-             # Handle case where dimension d is not set (should not happen after __post_init__)
-             log.error("Algebra dimension 'd' not set before initializing pss.")
-             # Set pss to None or raise error? Let's set to None.
-             self.pss = None # Or raise AttributeError("Algebra not properly initialized.")
-
-
-    def _create_registry(self) -> None:
-        # Need to import these locally if not already available
-        try:
-             from kingdon.operator_dict import OperatorDict, UnaryOperatorDict
-             import kingdon.codegen as codegen_module
-        except ImportError as e:
-             log.error(f"Failed to import OperatorDict/UnaryOperatorDict/codegen in _create_registry: {e}")
-             self.registry = {} # Initialize empty registry on failure
-             return # Cannot proceed
-
-        self.registry = {}
-        for op_name, meta in self._operator_metadata.items():
-            codegen_func_name = meta.get('codegen'); operator_cls_name = meta.get('cls', OperatorDict)
-            if codegen_func_name:
-                codegen_func = getattr(codegen_module, codegen_func_name, None)
-                if codegen_func is None:
-                     log.warning(f"Codegen function '{codegen_func_name}' not found for operator '{op_name}'. Skipping registration.")
-                     continue
-                try:
-                     operator_cls = UnaryOperatorDict if operator_cls_name == UnaryOperatorDict else OperatorDict
-                     operator_instance = operator_cls(name=op_name, algebra=self, codegen=codegen_func)
-                     self.registry[op_name] = operator_instance
-                     setattr(self, op_name, operator_instance)
-                except Exception as e_create:
-                     log.error(f"Failed to create/register operator '{op_name}': {e_create}")
-
-
-    def _compile_gp_func(self) -> Callable[[int, int], Tuple[int, int]]:
-        @lru_cache(maxsize=None)
-        def gp_basis(b1_idx: int, b2_idx: int) -> Tuple[int, int]:
-            """ Computes basis_out_idx, sign = gp(basis[b1_idx], basis[b2_idx])."""
-            sign = self.signs.get((b1_idx, b2_idx), 0)
-            # Resulting blade index is XOR of input indices
-            result_idx = b1_idx ^ b2_idx
-            return result_idx, sign
-        return gp_basis
-
-    # ========================================================================
-    # Helper Methods
-    # ========================================================================
-
-    def _parse_composite_custom_key(self, key_str: str) -> Optional[List[int]]:
-        # (Unchanged from previous state - relies on self.basis_names, self.canon2bin)
-        if not self.basis_names:
-            return None # Cannot parse if no custom names defined
-        matched_keys = []
-        matched_names_set = set()
-        remaining_key_str = key_str
-        sorted_basis_names = sorted(self.basis_names, key=len, reverse=True)
-        while remaining_key_str:
-            found_match = False
-            for name in sorted_basis_names:
-                if remaining_key_str.startswith(name):
-                    int_key = self.canon2bin.get(name)
-                    if int_key is None:
-                        log.error(f"Internal error: Custom basis name '{name}' not found in canon2bin.")
-                        return None
-                    if name in matched_names_set:
-                        log.debug(f"Parsing failed: Duplicate component '{name}' found in '{key_str}'.")
-                        return None
-                    matched_keys.append(int_key)
-                    matched_names_set.add(name)
-                    remaining_key_str = remaining_key_str[len(name):]
-                    found_match = True
-                    break
-            if not found_match:
-                log.debug(f"Parsing failed: Cannot match remaining part '{remaining_key_str}' of '{key_str}' with custom basis names.")
-                return None
-        # Return list of integer keys corresponding to matched custom names
-        return matched_keys
-
-    # --- ADDED: Definition for _canonical_key_sort_func ---
-    def _canonical_key_sort_func(self) -> Callable[[int], Tuple[int, float]]:
+    # This method replaces the old `_blade2canon` completely.
+    def _blade2canon(self, basis_blade: str) -> Tuple[str, int]:
         """
-        Returns a sort key function for canonical ordering (grade, then index within grade).
-        Uses a precomputed map for efficiency.
+        Converts a user-provided blade string into its canonical name and sign swap count.
+        Handles 'e0' as a universal alias for the scalar 'e'.
         """
-        # Ensure the map is built (should be done in __post_init__)
-        if not hasattr(self, '_key_to_grade_index_map'):
-             # Fallback build if somehow missed in post_init (should not happen)
-             print("Warning: _key_to_grade_index_map not found, rebuilding...")
-             # (Rebuild logic - copy from __post_init__)
-             self._key_to_grade_index_map = {}
-             all_keys_iterable = range(len(self))
-             key_func = lambda k: bin(k).count('1')
-             all_keys_sorted_by_grade = sorted(all_keys_iterable, key=key_func)
-             for grade, group in groupby(all_keys_sorted_by_grade, key=key_func):
-                  grade_keys = list(group)
-                  for index, key in enumerate(grade_keys):
-                      self._key_to_grade_index_map[key] = (grade, float(index))
+        if not isinstance(basis_blade, str):
+            raise TypeError(f"Blade names must be strings, got {type(basis_blade).__name__}.")
 
-        # Use the map built during __post_init__
-        _map = self._key_to_grade_index_map # Local reference for the returned function
+        # Handle universal scalar aliases first.
+        if basis_blade == "e" or basis_blade == "e0":
+            return "e", 0
 
-        def sort_key(k: int) -> Tuple[int, float]:
-            """Sorts by grade, then index within that grade using precomputed map."""
-            # Provide a fallback: sort by grade, then numerical key value if not found
-            return _map.get(k, (bin(k).count('1'), float(k)))
+        # Check for direct match in canonical names (e.g., 'e1', 'e12', or custom names)
+        if basis_blade in self.canon2bin:
+            return basis_blade, 0
 
-        return sort_key
-    # --- END ADDED ---
+        # If not a direct match, parse as `e<indices>` format
+        match_default = re.match(r'^e([0-9]+)$', basis_blade)
+        if not match_default:
+            # Try to parse as a composite of custom names if available
+            if self.basis_names and self._parse_composite_custom_key(basis_blade):
+                return basis_blade, 0 # Let the creation logic handle composites
+            raise ValueError(f"Invalid basis blade format: '{basis_blade}'. Not a canonical name or 'e<indices>'.")
 
-    # ========================================================================
-    # Multivector Creation Methods (Using _process_creation_args)
-    # ========================================================================
+        indices_str = match_default.group(1)
+        indices = [int(c) for c in indices_str]
 
-    def _process_creation_args(self, *args: Any, **kwargs: Any) -> Tuple[Optional[Tuple[int, ...]], Optional[Union[List[Any], np.ndarray, Dict[str, Any]]], Optional[Tuple[int, ...]], Optional[str], Optional[Any]]:
-        """Internal helper to parse arguments for multivector creation."""
-        # Pop arguments from kwargs first
-        values = kwargs.pop('values', None)
-        keys = kwargs.pop('keys', None)
-        grades = kwargs.pop('grades', None)
-        name = kwargs.pop('name', None)
-        symbolcls = kwargs.pop('symbolcls', None)
+        if len(set(indices)) != len(indices):
+            raise ValueError(f"Duplicate indices in blade name: {basis_blade}")
 
-        # --- Argument Conflict Checks ---
-        # (Combined checks for clarity)
-        has_keys = keys is not None
-        has_grades = grades is not None
-        has_kwargs_blades = bool(kwargs) # Check if remaining kwargs exist (implies blade keys)
-        has_name = name is not None
-        has_values = values is not None
+        min_idx, max_idx = self.start_index, self.start_index + self.d - 1
+        if not all(min_idx <= i <= max_idx for i in indices):
+            raise ValueError(f"Indices in '{basis_blade}' must be between {min_idx} and {max_idx}")
 
-        if has_keys and has_grades: raise ValueError("Cannot specify both 'keys' and 'grades' arguments.")
-        if has_keys and has_kwargs_blades: raise ValueError("Cannot specify both 'keys' and keyword arguments for blades.")
-        if has_grades and has_kwargs_blades: raise ValueError("Cannot specify 'grades' and keyword arguments for blades.")
-        if has_name and has_kwargs_blades: raise ValueError("Cannot specify both 'name' (symbolic) and keyword arguments for blades.")
-        if has_name and has_values: raise ValueError("Cannot specify both 'name' (symbolic) and explicit 'values'.")
+        sorted_indices = sorted(indices)
+        canonical_name = f"e{''.join(map(str, sorted_indices))}"
+        
+        swaps = 0
+        current_indices = list(indices)
+        n = len(current_indices)
+        for i in range(n):
+            for j in range(n - 1 - i):
+                if current_indices[j] > current_indices[j+1]:
+                    current_indices[j], current_indices[j+1] = current_indices[j+1], current_indices[j]
+                    swaps += 1
+        return canonical_name, swaps
 
-        # --- Process Positional Args ---
-        if args:
-            if len(args) > 1: raise TypeError(f"Too many positional arguments ({len(args)}), expected 0 or 1.")
-            arg = args[0]
-            # Assign positional arg based on what's not already set by keywords
-            if isinstance(arg, str) and not has_name: name = arg
-            elif not has_values: values = arg
-            elif isinstance(arg, (int, float, complex, sympy.Expr)) and not has_values and not has_name: values = arg # Allow scalar value
-            else: raise TypeError(f"Unexpected positional argument type '{type(arg).__name__}' or argument already specified via keyword.")
+    # This method is now DELETED. It is replaced by the logic within the new `multivector` method.
+    # def _process_creation_args(...):
+    #     ...
 
-        # --- Process Keyword Args (Blades) ---
-        if has_kwargs_blades:
-             # Ensure basis mappings are ready
-             if not hasattr(self, 'canon2bin') or not self.canon2bin: self._setup_basis_mappings()
-             blade_kwargs_processed = {}
-             for k_str, v in kwargs.items():
-                  # Validate blade name (standard 'e...', custom, or composite custom)
-                  is_valid_blade = False
-                  if isinstance(k_str, str):
-                       try:
-                            # Check if it's a valid canonical or custom name via _blade2canon
-                            self._blade2canon(k_str) # This validates format/indices
-                            is_valid_blade = True
-                       except ValueError:
-                            # If not standard, try parsing as composite custom key
-                            if self._parse_composite_custom_key(k_str): is_valid_blade = True
-                  elif k_str == 'e': is_valid_blade = True # Explicitly allow 'e'
+    # This is the new, definitive `multivector` factory method.
+    # It replaces the old `multivector` method and the `_process_creation_args` logic.
+    def multivector(self, values: Optional[Any] = None, *,
+                    keys: Optional[Sequence[Union[int, str]]] = None,
+                    grades: Optional[Sequence[int]] = None,
+                    name: Optional[str] = None,
+                    **blade_kwargs: Any) -> 'MultiVector':
+        """
+        Primary factory method to create a multivector in this algebra.
 
-                  if is_valid_blade:
-                      blade_kwargs_processed[k_str] = v
-                  else:
-                      # Raise error for unexpected keyword args not matching blades
-                      raise TypeError(f"{type(self).__name__}.multivector() got an unexpected keyword argument '{k_str}'. If specifying blades, use valid names.")
+        Order of precedence: `name` (symbolic), `keys`, `grades`, `blade_kwargs`, `values`.
+        """
+        from .multivector import MultiVector # Local import
 
-             if blade_kwargs_processed:
-                 # Merge blade kwargs into the 'values' dict
-                 if has_values:
-                      if not isinstance(values, dict):
-                           raise TypeError("Cannot specify both 'values' (as list/array/scalar) and keyword arguments for blades. Use a dictionary for 'values' or omit it.")
-                      # Check for overlaps
-                      overlapping_keys = set(values.keys()) & set(blade_kwargs_processed.keys())
-                      if overlapping_keys: raise ValueError(f"Blade keys specified in both 'values' dict and keyword arguments: {overlapping_keys}")
-                      values.update(blade_kwargs_processed)
-                 else:
-                      values = blade_kwargs_processed # Assign if values wasn't provided
+        # --- Case 1: Symbolic Creation ---
+        if name is not None:
+            if blade_kwargs or values is not None:
+                raise ValueError("Cannot specify 'values' or blade keywords with 'name' for symbolic creation.")
+            
+            sym_cls = self.codegen_symbolcls
+            keys_tuple: Tuple[int, ...]
 
-        # Return processed/consolidated arguments
-        return keys, values, grades, name, symbolcls
+            if keys is not None:
+                key_set = {self.canon2bin[self._blade2canon(k)[0]] if isinstance(k, str) else k for k in keys}
+                keys_tuple = tuple(sorted(list(key_set), key=self._canonical_key_sort_func()))
+            elif grades is not None:
+                key_set = {k for g in grades for k in self.indices_for_grades.get((g,), [])}
+                keys_tuple = tuple(sorted(list(key_set), key=self._canonical_key_sort_func()))
+            else:
+                # Full symbolic multivector if no keys/grades specified
+                keys_tuple = tuple(range(len(self)))
 
+            final_values = [sym_cls(f"{name}_{self.bin2canon.get(k, k)}") for k in keys_tuple]
+            return MultiVector.fromkeysvalues(self, keys=keys_tuple, values=final_values)
 
-    def multivector(self, *args: Any, **kwargs: Any) -> 'MultiVector':
-        """ Primary factory method to create a multivector in this algebra. """
-        # Import here to avoid circularity at module level if needed
-        try:
-            from kingdon.multivector import MultiVector
-        except ImportError as e:
-             log.error(f"Failed to import MultiVector in Algebra.multivector: {e}")
-             raise
+        # --- Case 2: Creation from Blade Keywords ---
+        if blade_kwargs:
+            if values is not None or keys is not None or grades is not None:
+                raise ValueError("Cannot mix blade keywords with 'values', 'keys', or 'grades'.")
+            
+            key_set = {self.canon2bin[self._blade2canon(k)[0]] for k in blade_kwargs.keys()}
+            keys_tuple = tuple(sorted(list(key_set), key=self._canonical_key_sort_func()))
+            # Map canonical names back to binary keys to retrieve values correctly
+            canon_map = {self.canon2bin[self._blade2canon(k)[0]]: v for k, v in blade_kwargs.items()}
+            final_values = [canon_map.get(k, 0) for k in keys_tuple]
+            return MultiVector.fromkeysvalues(self, keys=keys_tuple, values=final_values)
 
-        keys, values, grades, name, symbolcls_arg = self._process_creation_args(*args, **kwargs)
-        symbolcls_arg = symbolcls_arg or self.codegen_symbolcls # Use algebra default if not specified
+        # --- Case 3: Creation from explicit keys and values ---
+        if keys is not None:
+            key_set = {self.canon2bin[self._blade2canon(k)[0]] if isinstance(k, str) else k for k in keys}
+            keys_tuple = tuple(sorted(list(key_set), key=self._canonical_key_sort_func()))
+            return MultiVector.fromkeysvalues(self, keys=keys_tuple, values=values)
+            
+        # --- Case 4: Creation from grades and values ---
+        if grades is not None:
+            key_set = {k for g in grades for k in self.indices_for_grades.get((g,), [])}
+            keys_tuple = tuple(sorted(list(key_set), key=self._canonical_key_sort_func()))
+            if values is None:
+                values = [1] * len(keys_tuple)
+            return MultiVector.fromkeysvalues(self, keys=keys_tuple, values=values)
 
-        # --- Variable Initialization ---
-        final_keys: Optional[List[int]] = None # Use list initially for easier manipulation
-        final_values: Union[List[Any], np.ndarray]
-        target_len: int = -1 # Expected length based on keys/grades
+        # --- Case 5: Creation from a dictionary of blade names to values ---
+        if isinstance(values, dict):
+            # Handle empty dictionary case - create truly empty multivector
+            if not values:
+                return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            # If all keys are ints, treat as blade-indexed values (the main GA case!)
+            if all(isinstance(k, int) for k in values.keys()):
+                keys_tuple = tuple(sorted(values.keys()))
+                final_values = [values[k] for k in keys_tuple]
+                return MultiVector.fromkeysvalues(self, keys=keys_tuple, values=final_values)
+            # If keys are strings, treat as blade keywords
+            elif all(isinstance(k, str) for k in values.keys()):
+                return self.multivector(**values)
+            else:
+                raise TypeError("Dictionary keys for 'values' must be all ints (for blade indices) or all strings (for blade keywords).")
 
-        # --- Determine Final Keys and Target Length ---
-        max_key_val = (1 << self.d) - 1 if self.d >= 0 else -1 # Maximum valid integer key
-
-        if keys is not None: # Case 1: Explicit keys provided
-            processed_keys_set = set() # Use set to handle duplicates gracefully
-            keys_input = (keys,) if isinstance(keys, (int, str)) else keys # Normalize input
-
-            if not isinstance(keys_input, (tuple, list, set)): # Allow set input as well
-                raise TypeError(f"`keys` argument must be an int, string, or an iterable (tuple/list/set). Got {type(keys_input).__name__}.")
-
-            for k in keys_input:
-                if isinstance(k, int):
-                    if not (0 <= k <= max_key_val): raise ValueError(f"Integer key {k} out of range [0, {max_key_val}] for dimension {self.d}.")
-                    processed_keys_set.add(k)
-                elif isinstance(k, str):
-                    try:
-                        canon_name, _ = self._blade2canon(k) # Validates format/indices
-                        int_key = self.canon2bin.get(canon_name)
-                        if int_key is None: raise KeyError(f"Internal error mapping canonical name '{canon_name}'.")
-                        processed_keys_set.add(int_key)
-                    except (ValueError, KeyError) as e: raise ValueError(f"Invalid basis blade name '{k}' provided in 'keys': {e}") from e
-                else: raise TypeError(f"Items in `keys` must be integers or strings. Got type {type(k).__name__}.")
-
-            # Convert set to sorted list using canonical sort func
-            final_keys = sorted(list(processed_keys_set), key=self._canonical_key_sort_func())
-            target_len = len(final_keys)
-            # Handle d=0 case where keys might be just {0}
-            if not final_keys and 0 in processed_keys_set and self.d == 0: final_keys = [0]; target_len = 1
-
-        elif grades is not None: # Case 2: Grades provided
-            grades_input = (grades,) if isinstance(grades, int) else grades # Normalize
-            if not isinstance(grades_input, (tuple, list, set)): # Allow set
-                raise TypeError(f"`grades` must be an int or an iterable (tuple/list/set). Got {type(grades_input).__name__}.")
-
-            valid_grades = set()
-            for g in grades_input:
-                 if not isinstance(g, int) or not (0 <= g <= self.d): raise ValueError(f"Grade {g} invalid for dim {self.d}.")
-                 valid_grades.add(g)
-
-            collected_keys_set = set()
-            for g in sorted(list(valid_grades)):
-                grade_keys = self.indices_for_grades.get((g,), [])
-                collected_keys_set.update(grade_keys)
-
-            final_keys = sorted(list(collected_keys_set), key=self._canonical_key_sort_func())
-            target_len = len(final_keys)
-            if not final_keys and 0 in valid_grades and self.d == 0: final_keys = [0]; target_len = 1
-
-        elif isinstance(values, dict): # Case 3: Values as Dict (already merged with kwargs)
-             processed_keys_dict = {} # Map int_key -> original_key_input
-             keys_to_process_set = set()
-             for k_in, v in values.items():
-                 int_key: Optional[int] = None
-                 original_key_repr = repr(k_in) # Store representation for error messages
-                 if isinstance(k_in, str):
-                     try:
-                          # Try standard interpretation first
-                          canon_name, _ = self._blade2canon(k_in)
-                          int_key_opt = self.canon2bin.get(canon_name)
-                          # If standard name fails, try parsing as composite custom key
-                          if int_key_opt is None:
-                               parsed_custom_keys = self._parse_composite_custom_key(k_in)
-                               if parsed_custom_keys is not None:
-                                    combined_key = reduce(operator.xor, parsed_custom_keys, 0)
-                                    int_key_opt = combined_key
-                               else: raise KeyError # Parsing failed
-                          int_key = int_key_opt
-                     except (ValueError, KeyError) as e: raise KeyError(f"Invalid basis blade key '{k_in}': {e}") from e
-                 elif isinstance(k_in, int):
-                     if not (0 <= k_in <= max_key_val): raise KeyError(f"Integer key {k_in} out of range [0, {max_key_val}].")
-                     int_key = k_in
-                 else: raise TypeError(f"Invalid key type {type(k_in).__name__} in values dict. Use int or str.")
-
-                 if int_key is None: raise RuntimeError(f"Internal error: Failed to determine integer key for input key '{k_in}'.")
-                 if int_key in keys_to_process_set: raise ValueError(f"Duplicate key specified: '{k_in}' resolves to same component as input '{processed_keys_dict[int_key]}'.")
-                 keys_to_process_set.add(int_key)
-                 processed_keys_dict[int_key] = k_in # Store original key for value lookup later
-
-             final_keys = sorted(list(keys_to_process_set), key=self._canonical_key_sort_func())
-             target_len = len(final_keys)
-             # Handle empty dict case - results in zero scalar
-             if not final_keys: final_keys = [0]; target_len = 1
-
-        elif name is not None: # Case 4: Symbolic multivector requested
-             # Check if grades were also specified implicitly (should be caught by conflict checks)
-             if grades is not None: pass # final_keys/target_len already set by Case 2
-             else: # Full symbolic MV (all canonical blades)
-                 # Use range(len(self)) to get all keys 0 to 2^d-1
-                 final_keys = sorted(list(range(len(self))), key=self._canonical_key_sort_func())
-                 target_len = len(self) # Length of full algebra
-
-        else: # Case 5: Values as list/array/scalar or None (default)
-            # Default to scalar 0 if values is None
-            if values is None: values = 0
-
-            if isinstance(values, (int, float, complex, sympy.Expr)):
-                 # Interpret as scalar value if keys/grades not specified
-                 final_keys = [0]; target_len = 1
-            elif isinstance(values, (list, tuple, np.ndarray)): # Sequence input
-                 val_len = len(values)
-                 algebra_len = len(self)
-                 if val_len == algebra_len: # Assume full canonical sequence
-                     final_keys = sorted(list(range(algebra_len)), key=self._canonical_key_sort_func())
-                     target_len = algebra_len
-                 else: # Ambiguous length - require explicit keys/grades
-                      raise ValueError(f"Length of sequence 'values' ({val_len}) is ambiguous. Provide explicit 'keys' or 'grades', or ensure length matches algebra size ({algebra_len}).")
-            else: # Unhandled type for values when keys/grades not specified
-                 raise TypeError(f"Unsupported type for 'values': {type(values).__name__}. Provide explicit 'keys' or 'grades', or use dict/sequence/scalar.")
-
-        # --- Final Key/Length Consistency Check ---
-        if final_keys is None or target_len == -1: raise RuntimeError("Internal state error: final_keys or target_len not determined.")
-        # Ensure final_keys is a list before proceeding
-        if not isinstance(final_keys, list): final_keys = list(final_keys)
-
-        # --- Determine Final Values ---
-        is_sympy_algebra = self.codegen_symbolcls != float # Check if algebra is symbolic
-        default_zero = sympy.Integer(0) if is_sympy_algebra else 0.0
-
-        if name is not None: # Case 4: Symbolic
-             sym_func = symbolcls_arg or sympy.Symbol
-             final_values_list = []
-             for k in final_keys:
-                 # Use bin2canon for suffix, provide fallback
-                 blade_suffix = self.bin2canon.get(k, f'k{k}')
-                 # Handle scalar case name
-                 sym_name = name if k == 0 else f"{name}_{blade_suffix}"
-                 try:
-                     # Create symbol, assume scalar for key 0 if name only provided?
-                     # Or require specific dict value for scalar? Assume sym for k=0 too.
-                     final_values_list.append(sym_func(sym_name))
-                 except TypeError as e_sym: raise TypeError(f"Failed to create symbol '{sym_name}' using symbol class {sym_func}: {e_sym}")
-             final_values = final_values_list
-
-        elif isinstance(values, dict): # Case 3: Dict/Keywords
-             # Need mapping from int_key back to original input key for lookup
-             int_to_orig_key = {k: v for v, k in processed_keys_dict.items()}
-             final_values_map = {}
-             for k_int in final_keys:
-                  orig_key = int_to_orig_key.get(k_int)
-                  if orig_key is None: # Should not happen if final_keys derived correctly
-                       log.error(f"Internal error: Cannot find original key for integer key {k_int} in dict case.")
-                       val_to_use = default_zero
-                  else:
-                       raw_val = values.get(orig_key, default_zero)
-                       # Sympify only if symbolic algebra context, else keep as is
-                       val_to_use = sympify(raw_val) if is_sympy_algebra else raw_val
-                  final_values_map[k_int] = val_to_use
-             # Handle the zero scalar case where final_keys might be [0] but values dict was empty
-             if not values and final_keys == [0]: final_values = [default_zero]
-             else: final_values = [final_values_map.get(k, default_zero) for k in final_keys]
-
-        elif isinstance(values, (list, tuple, np.ndarray)): # Case 1, 2, 5 (Sequence)
-             if len(values) != target_len: # Should be caught earlier, but double check
-                 raise ValueError(f"Internal value length mismatch: expected {target_len}, got {len(values)}.")
-             # Convert to list/ndarray, sympify elements if symbolic algebra
-             processed_vals = [sympify(v) if is_sympy_algebra else v for v in values]
-             final_values = np.array(processed_vals) if isinstance(values, np.ndarray) else list(processed_vals)
-
-        elif isinstance(values, (int, float, complex, sympy.Expr)): # Case 5 (Scalar)
-             if final_keys == [0] and target_len == 1:
-                 # Sympify if symbolic algebra
-                 final_values = [sympify(values) if is_sympy_algebra else values]
-             else: # Should be caught earlier
-                 raise ValueError(f"Scalar value '{values}' provided, but target keys {final_keys} indicate non-scalar structure.")
-        else: # Should not be reached if logic above is correct
-             raise TypeError(f"Internal error: Unhandled type for 'values': {type(values).__name__}")
-
-        # --- Final Construction using fromkeysvalues ---
-        # Ensure keys is tuple, values is list or ndarray
-        final_keys_tuple = tuple(final_keys)
-        return MultiVector.fromkeysvalues(self, keys=final_keys_tuple, values=final_values)
+        # --- Case 6: Fallback for scalar, full list/array, or empty ---
+        if values is None: values = 0
+        if isinstance(values, (int, float, complex, sympy.Expr)):
+            return MultiVector.fromkeysvalues(self, keys=(0,), values=[values])
+        if isinstance(values, (list, tuple, np.ndarray)):
+            if len(values) != len(self):
+                raise ValueError(f"Ambiguous list `values` of length {len(values)}. Must match algebra length {len(self)} or provide `keys`/`grades`.")
+            final_keys_values = [(i, v) for i, v in enumerate(values) if v != 0]
+            if not final_keys_values: return self.scalar(0)
+            final_keys, final_values = zip(*final_keys_values)
+            return MultiVector.fromkeysvalues(self, keys=final_keys, values=list(final_values))
+        
+        raise TypeError(f"Could not create MultiVector from supplied arguments: {values}")
 
     # ========================================================================
-    # Convenience Factory Methods (Calling self.multivector)
+    # Convenience Factory Methods (Now calling the new self.multivector)
     # ========================================================================
-    # (Methods scalar, vector, bivector, trivector, purevector, evenmv, oddmv
-    #  blade, pseudoscalar, rotor, translator, reflector, motor remain unchanged
-    #  from previous step, as they already call self.multivector)
+
     def scalar(self, value: Any = 0, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a scalar (grade 0) multivector."""
-        # Pass value directly, multivector handles scalar case
-        return self.multivector(values=value, grades=(0,), name=name)
+        return self.multivector(values=value, name=name, grades=(0,))
 
-    def vector(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], *, name: Optional[str] = None) -> 'MultiVector':
+    def vector(self, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a vector (grade 1) multivector."""
-        return self.multivector(values=values, grades=(1,), name=name)
+        return self.multivector(values=values, name=name, grades=(1,))
 
-    def bivector(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], *, name: Optional[str] = None) -> 'MultiVector':
+    def bivector(self, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a bivector (grade 2) multivector."""
-        return self.multivector(values=values, grades=(2,), name=name)
+        return self.multivector(values=values, name=name, grades=(2,))
 
-    def trivector(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], *, name: Optional[str] = None) -> 'MultiVector':
+    def trivector(self, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a trivector (grade 3) multivector."""
-        return self.multivector(values=values, grades=(3,), name=name)
+        return self.multivector(values=values, name=name, grades=(3,))
 
-    def purevector(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], grade: int, *, name: Optional[str] = None) -> 'MultiVector':
+    def purevector(self, grade: int, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a pure grade multivector."""
         if not isinstance(grade, int) or not (0 <= grade <= self.d):
-             raise ValueError(f"Grade must be an integer between 0 and {self.d}")
+            raise ValueError(f"Grade must be an integer between 0 and {self.d}")
         return self.multivector(values=values, grades=(grade,), name=name)
 
-    def evenmv(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], *, name: Optional[str] = None) -> 'MultiVector':
+    def evenmv(self, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a multivector containing only even grades."""
         even_grades = tuple(g for g in range(0, self.d + 1) if g % 2 == 0)
-        if not even_grades and self.d == 0: even_grades = (0,) # Handle d=0 case
-        # Return zero scalar if no even grades exist (e.g., d=-1?)
-        # elif not even_grades: return self.scalar(0, name=name)
         return self.multivector(values=values, grades=even_grades, name=name)
 
-    def oddmv(self, values: Union[Sequence[Any], np.ndarray, Dict[Union[str, int], Any]], *, name: Optional[str] = None) -> 'MultiVector':
+    def oddmv(self, values: Optional[Any] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a multivector containing only odd grades."""
         odd_grades = tuple(g for g in range(1, self.d + 1) if g % 2 != 0)
-        # Return zero scalar if no odd grades exist (e.g., d=0)
-        # if not odd_grades: return self.scalar(0, name=name)
         return self.multivector(values=values, grades=odd_grades, name=name)
 
     def blade(self, spec: Union[str, Sequence[int]], value: Any = 1, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a multivector representing a single basis blade."""
-        # Use dict format for values to pass to self.multivector
         blade_values = {}
         sign = 1
-
         if isinstance(spec, (list, tuple, set)):
             indices = list(spec)
-            if not indices: key_str = "e" # Scalar
+            if not indices: key_str = "e"
             else:
-                # Validate indices
                 min_idx, max_idx = self.start_index, self.start_index + self.d - 1
                 if not all(isinstance(i, int) and min_idx <= i <= max_idx for i in indices):
-                     raise ValueError(f"Indices {indices} must be integers between {min_idx} and {max_idx}")
+                    raise ValueError(f"Indices {indices} must be integers between {min_idx} and {max_idx}")
                 if len(set(indices)) != len(indices): raise ValueError(f"Indices in {indices} must be unique.")
-                # Get canonical name and sign factor
                 sorted_indices = sorted(indices)
                 key_str = f"e{''.join(map(str, sorted_indices))}"
                 current_indices = list(indices); swaps = 0; n = len(current_indices)
-                for i in range(n): # Bubble sort swap counting
-                     for j in range(n - 1 - i):
-                          if current_indices[j] > current_indices[j+1]: current_indices[j], current_indices[j+1] = current_indices[j+1], current_indices[j]; swaps += 1
+                for i in range(n):
+                    for j in range(n - 1 - i):
+                        if current_indices[j] > current_indices[j+1]: current_indices[j], current_indices[j+1] = current_indices[j+1], current_indices[j]; swaps += 1
                 sign = (-1)**swaps
         elif isinstance(spec, str):
-            try:
-                canonical_name, swaps = self._blade2canon(spec)
-                key_str = canonical_name
-                sign = (-1)**swaps
-            except ValueError as e: raise ValueError(f"Invalid blade specification string '{spec}': {e}")
+            canonical_name, swaps = self._blade2canon(spec)
+            key_str = canonical_name
+            sign = (-1)**swaps
         else: raise TypeError("Blade specification must be a string or an iterable of indices.")
 
         final_value = sign * value
         blade_values[key_str] = final_value
-        # Pass dict to multivector factory
-        try: return self.multivector(values=blade_values, name=name)
-        except KeyError as e: raise ValueError(f"Could not create blade for spec '{spec}' (resolved to '{key_str}'): {e}")
+        return self.multivector(name=name, **blade_values)
 
     def pseudoscalar(self, value: Any = 1, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates the pseudoscalar multivector, optionally scaled."""
         if self.pss is None: raise AttributeError("Pseudoscalar (pss) not initialized for this algebra.")
-        # Return copy if value is 1 and no name, otherwise scale/name
         if value == 1 and name is None:
-             # Need to decide if self.pss is mutable. Assume immutable for safety, return copy.
-             return self.pss.copy() # Return a copy
+            return self.pss.copy()
         else:
-             # Multiply returns a new object
-             scaled_pss = self.pss * value
-             # Naming symbolic MVs needs careful handling; assume name applies if symbolic
-             if name is not None and scaled_pss.issymbolic:
-                  # This needs a mechanism to rename symbolic components or attach name
-                  log.warning(f"Naming symbolic result in pseudoscalar({name=}) not fully implemented.")
-                  # scaled_pss.name = name # Placeholder - might not work
-             return scaled_pss
-
-    # --- Geometric Object Factories (Rotor, Translator, etc.) ---
-    # These require specific algebra setups (e.g., PGA for translator)
-    # and mathematical functions (cos, sin, sqrt). Ensure 'math' is imported.
+            scaled_pss = self.pss * value
+            if name is not None:
+                # This is tricky for symbolic results. The best we can do is create a new symbolic
+                # object if the result is symbolic. For now, this is a known limitation.
+                log.warning(f"Naming the result of a scaled pseudoscalar is not fully supported.")
+            return scaled_pss
 
     def rotor(self, angle: float, plane_indices: Tuple[int, int], *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a rotor for rotation in a specified plane."""
-        if not isinstance(plane_indices, tuple) or len(plane_indices) != 2: raise TypeError("plane_indices must be a tuple of two integers.")
-        i, j = sorted(plane_indices)
-        if i == j: raise ValueError("plane_indices must contain two distinct indices.")
-        try:
-            # R = exp(-B * angle / 2) where B is the unit bivector for the plane
-            # B = blade([i, j])
-            B = self.blade([i, j])
-            # Check B*B to ensure it's -1 (or appropriate scalar)
-            B2 = (B*B).e # Geometric product and extract scalar part
-            if abs(B2 + 1.0) > 1e-9: # Check if B^2 is close to -1
-                 raise ValueError(f"Cannot create rotor: Plane e{i}{j} does not square to -1 (B^2 = {B2}). Ensure Euclidean signature for these indices.")
-
-            # Use MultiVector exp method if available, or manual calculation
-            # Manual: cos(angle/2) - B * sin(angle/2)
-            cos_half = math.cos(angle / 2.0)
-            sin_half = math.sin(angle / 2.0)
-            rotor = self.scalar(cos_half) - B * sin_half
-            if name is not None and rotor.issymbolic: log.warning(f"Naming symbolic result in rotor({name=}) not fully implemented.")
-            return rotor
-        except (ValueError, AttributeError, TypeError) as e:
-             raise ValueError(f"Failed to create rotor for plane {plane_indices}: {e}") from e
-
+        if not isinstance(plane_indices, tuple) or len(plane_indices) != 2:
+            raise TypeError("plane_indices must be a tuple of two integers.")
+        B = self.blade(plane_indices)
+        B2_mv = B*B
+        if not (B2_mv.grades == (0,) and B2_mv.e < 0):
+            raise ValueError(f"Plane {plane_indices} does not square to a negative scalar. B*B = {B2_mv}")
+        
+        cos_half = math.cos(angle / 2.0)
+        sin_half = math.sin(angle / 2.0)
+        
+        rotor = self.scalar(cos_half) + (B / math.sqrt(-B2_mv.e)) * sin_half
+        return rotor # Naming is complex for composite objects, deferring.
 
     def translator(self, direction: Sequence[float], distance: float = 1.0, *, name: Optional[str] = None) -> 'MultiVector':
-        """Creates a translator in Projective Geometric Algebra (PGA). Requires r=1, start_index=0."""
-        if self.r != 1 or self.start_index != 0: raise ValueError("Translator requires a PGA setup (r=1, start_index=0).")
-        if len(direction) != self.d - 1: raise ValueError(f"Direction vector must have {self.d - 1} components for {self.d}D PGA.")
+        """Creates a translator in Projective Geometric Algebra (PGA)."""
+        if self.r != 1 or self.start_index != 0:
+            raise ValueError("Translator requires a PGA setup (r=1, start_index=0).")
+        if len(direction) != self.d - 1:
+            raise ValueError(f"Direction vector must have {self.d - 1} components for {self.d}D PGA.")
 
-        # T = 1 - d/2 * n, where n is the direction vector represented as e0i, e0j, ...
-        translator = self.scalar(1)
-        for i, component in enumerate(direction, start=1): # Assumes non-null indices start at 1
+        translator = self.scalar(1.0)
+        for i, component in enumerate(direction, start=1):
             if component != 0:
                 coeff = - (distance / 2.0) * component
-                try:
-                     # Blade e0i (assuming 0 is the null vector index)
-                     blade_term = self.blade([0, i], value=coeff)
-                     translator += blade_term
-                except (ValueError, KeyError) as e:
-                     raise ValueError(f"Failed to create translator blade for direction component {i}: {e}") from e
-        if name is not None and translator.issymbolic: log.warning(f"Naming symbolic result in translator({name=}) not fully implemented.")
+                translator += self.blade([0, i], value=coeff)
         return translator
 
     def reflector(self, normal: Sequence[float], *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a reflector (normalized plane or vector)."""
-        # Treat normal as vector for reflection. Plane representation might differ.
-        if len(normal) != self.d: raise ValueError(f"Normal vector length ({len(normal)}) must match algebra dimension ({self.d}).")
-        norm_vec = self.vector(values=normal, name=name)
-        try:
-            reflector = norm_vec.normalized()
-            if name is not None and reflector.issymbolic: log.warning(f"Naming symbolic result in reflector({name=}) not fully implemented.")
-            return reflector
-        except ZeroDivisionError: raise ValueError("Normal vector cannot be zero (cannot normalize).")
-        except TypeError as e: raise TypeError(f"Could not normalize the normal vector: {e}")
-
+        if len(normal) > self.d:
+            raise ValueError(f"Normal vector length ({len(normal)}) cannot exceed algebra dimension ({self.d}).")
+        
+        # Pad with zeros if a lower-dimensional vector is given
+        padded_normal = list(normal) + [0] * (self.d - len(normal))
+        
+        norm_vec = self.vector(values=padded_normal, name=name)
+        if norm_vec.norm() == 0:
+            raise ValueError("Normal vector cannot be zero.")
+        return norm_vec.normalized()
 
     def motor(self, rotation: Optional[Tuple[float, Tuple[int, int]]] = None, translation: Optional[Tuple[Sequence[float], float]] = None, *, name: Optional[str] = None) -> 'MultiVector':
         """Creates a motor (rotation * translation) typically in PGA."""
-        if not rotation and not translation: return self.scalar(1, name=name)
-        # Translation requires PGA setup
-        if translation and (self.r != 1 or self.start_index != 0): raise ValueError("Translation component requires a PGA setup (r=1, start_index=0).")
-
-        R = self.scalar(1); T = self.scalar(1)
-        if rotation: angle, plane_indices = rotation; R = self.rotor(angle, plane_indices)
-        if translation: direction, distance = translation; T = self.translator(direction, distance)
-
-        # Motor M = T * R (translation followed by rotation relative to origin)
+        R = self.scalar(1)
+        if rotation:
+            angle, plane_indices = rotation
+            R = self.rotor(angle, plane_indices)
+        
+        T = self.scalar(1)
+        if translation:
+            direction, distance = translation
+            T = self.translator(direction, distance)
+            
         motor = T * R
-        if name is not None and motor.issymbolic: log.warning(f"Naming symbolic result in motor({name=}) not fully implemented.")
         return motor
 
 
@@ -967,8 +721,8 @@ class Algebra:
         """Creates a GraphWidget for visualization."""
         # Import locally to avoid hard dependency if graph extras aren't installed
         try:
-            from kingdon.graph import GraphWidget
-            from kingdon.multivector import MultiVector # Import locally too
+            from .graph import GraphWidget
+            from .multivector import MultiVector # Import locally too
         except ImportError: log.error("GraphWidget or MultiVector could not be imported. Please ensure 'kingdon[graph]' extras are installed."); raise
         # Filter args to pass only MultiVectors to GraphWidget constructor if needed
         # Or pass all args and let GraphWidget handle them
@@ -976,14 +730,7 @@ class Algebra:
 
     def __len__(self) -> int: return 2**self.d
 
-    def __eq__(self, other: Any) -> bool:
-        if not isinstance(other, Algebra): return NotImplemented
-        sig_equal = np.array_equal(self.signature, other.signature) if self.signature is not None and other.signature is not None else self.signature == other.signature
-        basis_names_equal = self.basis_names == other.basis_names
-        # Include codegen_symbolcls comparison? Maybe too strict.
-        return (self.p == other.p and self.q == other.q and self.r == other.r and
-                self.start_index == other.start_index and sig_equal and
-                basis_names_equal and self.graded == other.graded)
+    
 
     def __hash__(self) -> int:
         sig_tuple = tuple(self.signature.tolist()) if self.signature is not None else None
@@ -1010,6 +757,990 @@ class Algebra:
     def from_signature(cls, signature: List[int], start_index: Optional[int] = None) -> 'Algebra':
          """Creates an Algebra instance from an explicit signature list."""
          return cls(signature=signature, start_index=start_index)
+
+    def gp(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the geometric product of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Geometric product x * y
+        """
+        from .multivector import MultiVector
+        
+        if x.algebra != self or y.algebra != self:
+            raise ValueError("Multivectors must belong to this algebra")
+            
+        # Result dictionary to accumulate terms
+        result_terms = {}
+        
+        # Iterate over all combinations of basis blades
+        for i, (kx, vx) in enumerate(zip(x._keys, x._values)):
+            for j, (ky, vy) in enumerate(zip(y._keys, y._values)):
+                # Get the sign from the Cayley table
+                sign = self.signs[kx, ky] if hasattr(self, 'signs') else 1
+                
+                if sign != 0:  # Non-zero product
+                    # XOR the keys to get output key (geometric product rule)
+                    key_out = kx ^ ky
+                    
+                    # Compute the coefficient
+                    if isinstance(vx, (int, float, complex)) and isinstance(vy, (int, float, complex)):
+                        coeff = sign * vx * vy
+                    else:
+                        # Handle symbolic case
+                        import sympy
+                        coeff = sign * sympy.Mul(vx, vy, evaluate=False) if sign > 0 else -sympy.Mul(vx, vy, evaluate=False)
+                    
+                    # Accumulate terms
+                    if key_out in result_terms:
+                        result_terms[key_out] += coeff
+                    else:
+                        result_terms[key_out] = coeff
+        
+        # Filter out zero terms and create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        # Sort keys and extract values
+        sorted_keys = tuple(sorted(result_terms.keys()))
+        sorted_values = [result_terms[k] for k in sorted_keys]
+        
+        return MultiVector.fromkeysvalues(self, keys=sorted_keys, values=sorted_values)
+
+    def inner_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the inner product of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Inner product x | y
+        """
+        return self._contraction_product(x, y, diff_func=abs)
+    
+    def left_contraction(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the left contraction of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Left contraction x << y
+        """
+        return self._contraction_product(x, y, diff_func=lambda k: -k)
+    
+    def right_contraction(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the right contraction of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Right contraction x >> y
+        """
+        return self._contraction_product(x, y, diff_func=lambda k: k)
+    
+    def _contraction_product(self, x: 'MultiVector', y: 'MultiVector', diff_func) -> 'MultiVector':
+        """
+        Helper method for computing contraction-based products.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            diff_func: Function to apply to key difference (abs for inner, -k for left, k for right)
+            
+        Returns:
+            Contraction product result
+        """
+        from .multivector import MultiVector
+        
+        if x.algebra != self or y.algebra != self:
+            raise ValueError("Multivectors must belong to this algebra")
+            
+        # Result dictionary to accumulate terms
+        result_terms = {}
+        
+        # Iterate over all combinations of basis blades
+        for kx, vx in zip(x._keys, x._values):
+            for ky, vy in zip(y._keys, y._values):
+                # Get the sign from the Cayley table
+                sign = self.signs[kx, ky] if hasattr(self, 'signs') else 1
+                
+                if sign != 0:  # Non-zero product
+                    # Apply contraction filter: k_out == diff_func(kx - ky)
+                    key_diff = kx - ky
+                    expected_key_out = diff_func(key_diff)
+                    actual_key_out = kx ^ ky
+                    
+                    # Only include terms that satisfy the contraction condition
+                    if actual_key_out == expected_key_out:
+                        # Compute the coefficient
+                        if isinstance(vx, (int, float, complex)) and isinstance(vy, (int, float, complex)):
+                            coeff = sign * vx * vy
+                        else:
+                            # Handle symbolic case
+                            import sympy
+                            coeff = sign * sympy.Mul(vx, vy, evaluate=False) if sign > 0 else -sympy.Mul(vx, vy, evaluate=False)
+                        
+                        # Accumulate terms
+                        if actual_key_out in result_terms:
+                            result_terms[actual_key_out] += coeff
+                        else:
+                            result_terms[actual_key_out] = coeff
+        
+        # Filter out zero terms and create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        # Sort keys and extract values
+        sorted_keys = tuple(sorted(result_terms.keys()))
+        sorted_values = [result_terms[k] for k in sorted_keys]
+        
+        return MultiVector.fromkeysvalues(self, keys=sorted_keys, values=sorted_values)
+
+    # Aliases for compatibility with existing code
+    def lc(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for left_contraction."""
+        return self.left_contraction(x, y)
+    
+    def rc(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for right_contraction."""
+        return self.right_contraction(x, y)
+    
+    def ip(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for inner_product."""
+        return self.inner_product(x, y)
+    
+    def outer_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the outer (exterior) product of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Outer product x ^ y
+        """
+        from .multivector import MultiVector
+        
+        if x.algebra != self or y.algebra != self:
+            raise ValueError("Multivectors must belong to this algebra")
+            
+        # Result dictionary to accumulate terms
+        result_terms = {}
+        
+        # Iterate over all combinations of basis blades
+        for kx, vx in zip(x._keys, x._values):
+            for ky, vy in zip(y._keys, y._values):
+                # Get the sign from the Cayley table
+                sign = self.signs[kx, ky] if hasattr(self, 'signs') else 1
+                
+                if sign != 0:  # Non-zero product
+                    # Outer product filter: k_out == kx + ky (grade addition)
+                    key_out = kx ^ ky
+                    grade_x = bin(kx).count('1')
+                    grade_y = bin(ky).count('1')
+                    grade_out = bin(key_out).count('1')
+                    
+                    # Only include terms where grades add up (outer product condition)
+                    if grade_out == grade_x + grade_y:
+                        # Compute the coefficient
+                        if isinstance(vx, (int, float, complex)) and isinstance(vy, (int, float, complex)):
+                            coeff = sign * vx * vy
+                        else:
+                            # Handle symbolic case
+                            import sympy
+                            coeff = sign * sympy.Mul(vx, vy, evaluate=False) if sign > 0 else -sympy.Mul(vx, vy, evaluate=False)
+                        
+                        # Accumulate terms
+                        if key_out in result_terms:
+                            result_terms[key_out] += coeff
+                        else:
+                            result_terms[key_out] = coeff
+        
+        # Filter out zero terms and create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        # Sort keys and extract values
+        sorted_keys = tuple(sorted(result_terms.keys()))
+        sorted_values = [result_terms[k] for k in sorted_keys]
+        
+        return MultiVector.fromkeysvalues(self, keys=sorted_keys, values=sorted_values)
+    
+    def op(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for outer_product."""
+        return self.outer_product(x, y)
+    
+    def sandwich_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the sandwich product of two multivectors: x * y * ~x.
+        
+        Args:
+            x: First multivector (the "sandwiching" multivector)
+            y: Second multivector (the multivector being sandwiched)
+            
+        Returns:
+            Sandwich product x * y * ~x
+        """
+        # Sandwich product is x * y * reverse(x)
+        x_rev = x.reverse()
+        return self.gp(self.gp(x, y), x_rev)
+    
+    def sw(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for sandwich_product."""
+        return self.sandwich_product(x, y)
+    
+    def regressive_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the regressive product (meet) of two multivectors.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Regressive product x ∨ y
+        """
+        from .multivector import MultiVector
+        
+        if x.algebra != self or y.algebra != self:
+            raise ValueError("Multivectors must belong to this algebra")
+        
+        # Regressive product is dual of outer product of duals
+        # x ∨ y = *((*x) ∧ (*y))
+        try:
+            x_dual = x.dual()
+            y_dual = y.dual()
+            outer_result = self.outer_product(x_dual, y_dual)
+            return outer_result.dual()
+        except (AttributeError, NotImplementedError):
+            # If dual is not implemented, use direct computation
+            return self._regressive_product_direct(x, y)
+    
+    def _regressive_product_direct(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Direct computation of regressive product without using duals.
+        Based on the original kingdon implementation.
+        """
+        from .multivector import MultiVector
+        
+        # Get pseudoscalar key (all bits set)
+        key_pss = len(self) - 1
+        
+        # Result dictionary to accumulate terms
+        result_terms = {}
+        
+        # Iterate over all combinations of basis blades
+        for kx, vx in zip(x._keys, x._values):
+            for ky, vy in zip(y._keys, y._values):
+                # Regressive product conditions
+                key_out = key_pss - (kx ^ ky)
+                
+                # Filter condition: key_pss == kx + ky - key_out
+                if key_pss == kx + ky - key_out:
+                    # Complex sign calculation for regressive product
+                    if hasattr(self, 'signs'):
+                        sign = (
+                            self.signs[kx, key_pss - kx] *
+                            self.signs[ky, key_pss - ky] *
+                            self.signs[key_pss - kx, key_pss - ky] *
+                            self.signs[key_pss - (kx ^ ky), kx ^ ky]
+                        )
+                    else:
+                        sign = 1
+                    
+                    if sign != 0:
+                        # Compute the coefficient
+                        if isinstance(vx, (int, float, complex)) and isinstance(vy, (int, float, complex)):
+                            coeff = sign * vx * vy
+                        else:
+                            # Handle symbolic case
+                            import sympy
+                            coeff = sign * sympy.Mul(vx, vy, evaluate=False) if sign > 0 else -sympy.Mul(vx, vy, evaluate=False)
+                        
+                        # Accumulate terms
+                        if key_out in result_terms:
+                            result_terms[key_out] += coeff
+                        else:
+                            result_terms[key_out] = coeff
+        
+        # Filter out zero terms and create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        # Sort keys and extract values
+        sorted_keys = tuple(sorted(result_terms.keys()))
+        sorted_values = [result_terms[k] for k in sorted_keys]
+        
+        return MultiVector.fromkeysvalues(self, keys=sorted_keys, values=sorted_values)
+    
+    def rp(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for regressive_product."""
+        return self.regressive_product(x, y)
+    
+    def commutator_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the commutator product of two multivectors: 0.5 * (x*y - y*x).
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Commutator product [x, y] = 0.5 * (x*y - y*x)
+        """
+        xy = self.gp(x, y)
+        yx = self.gp(y, x)
+        diff = xy - yx
+        return diff * 0.5
+    
+    def cp(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for commutator_product."""
+        return self.commutator_product(x, y)
+    
+    def anticommutator_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the anti-commutator product of two multivectors: 0.5 * (x*y + y*x).
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Anti-commutator product {x, y} = 0.5 * (x*y + y*x)
+        """
+        xy = self.gp(x, y)
+        yx = self.gp(y, x)
+        sum_result = xy + yx
+        return sum_result * 0.5
+    
+    def acp(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for anticommutator_product."""
+        return self.anticommutator_product(x, y)
+    
+    def inversion(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the multiplicative inverse of a multivector.
+        
+        Args:
+            x: Multivector to invert
+            
+        Returns:
+            Inverse of x such that x * x.inv() = 1
+        """
+        # For a multivector x, the inverse is x.reverse() / x.norm_squared()
+        # This works for invertible multivectors
+        try:
+            x_rev = x.reverse()
+            norm_sq = self.norm_squared(x)
+            
+            # Check if norm_squared is zero (non-invertible)
+            if isinstance(norm_sq, (int, float, complex)) and abs(norm_sq) < 1e-12:
+                raise ZeroDivisionError("Cannot invert multivector with zero norm")
+            
+            return x_rev / norm_sq
+        except (AttributeError, NotImplementedError):
+            raise NotImplementedError("Inversion requires reverse() and norm_squared() methods")
+    
+    def inv(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for inversion."""
+        return self.inversion(x)
+    
+    def division(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the division of two multivectors: x / y = x * y.inv().
+        
+        Args:
+            x: Dividend multivector
+            y: Divisor multivector
+            
+        Returns:
+            Division result x / y
+        """
+        y_inv = self.inversion(y)
+        return self.gp(x, y_inv)
+    
+    def div(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for division."""
+        return self.division(x, y)
+    
+    def norm_squared(self, x: 'MultiVector') -> Union[float, complex, 'MultiVector']:
+        """
+        Compute the squared norm of a multivector: x * x.reverse().
+        
+        Args:
+            x: Multivector to compute norm squared for
+            
+        Returns:
+            Squared norm (should be a scalar)
+        """
+        try:
+            x_rev = x.reverse()
+            result = self.gp(x, x_rev)
+            
+            # Extract scalar part if it's a multivector
+            if hasattr(result, '_keys') and hasattr(result, '_values'):
+                # Find scalar component (key 0)
+                if 0 in result._keys:
+                    idx = result._keys.index(0)
+                    return result._values[idx]
+                else:
+                    return 0  # No scalar component
+            return result
+        except (AttributeError, NotImplementedError):
+            raise NotImplementedError("norm_squared requires reverse() method")
+    
+    def normsq(self, x: 'MultiVector') -> Union[float, complex, 'MultiVector']:
+        """Alias for norm_squared."""
+        return self.norm_squared(x)
+    
+    def normalization(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Normalize a multivector to unit magnitude.
+        
+        Args:
+            x: Multivector to normalize
+            
+        Returns:
+            Normalized multivector x / |x|
+        """
+        import math
+        norm_sq = self.norm_squared(x)
+        
+        if isinstance(norm_sq, (int, float, complex)):
+            if abs(norm_sq) < 1e-12:
+                raise ZeroDivisionError("Cannot normalize zero multivector")
+            norm = math.sqrt(abs(norm_sq))
+            return x / norm
+        else:
+            # Symbolic case
+            import sympy
+            norm = sympy.sqrt(norm_sq)
+            return x / norm
+    
+    def sqrt_operation(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the square root of a multivector (simplified implementation).
+        
+        Args:
+            x: Multivector to take square root of
+            
+        Returns:
+            Square root of x
+        """
+        # This is a simplified implementation
+        # For a complete implementation, we'd need to handle the general case
+        # which can be quite complex for arbitrary multivectors
+        
+        # For scalars, it's straightforward
+        if hasattr(x, '_keys') and len(x._keys) == 1 and x._keys[0] == 0:
+            # Pure scalar
+            import math
+            scalar_val = x._values[0]
+            if isinstance(scalar_val, (int, float)) and scalar_val >= 0:
+                return self.scalar(math.sqrt(scalar_val))
+            else:
+                # Complex or symbolic case
+                import sympy
+                return self.scalar(sympy.sqrt(scalar_val))
+        
+        # For general multivectors, this is much more complex
+        # We'll implement a basic version that works for some cases
+        raise NotImplementedError("General multivector square root not yet implemented")
+    
+    def sqrt(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for sqrt_operation."""
+        return self.sqrt_operation(x)
+    
+    def scalar_product(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the scalar product of two multivectors.
+        
+        The scalar product extracts only the scalar part of the geometric product.
+        It's equivalent to the inner product with diff_func=lambda k: 0.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Scalar product (grade 0 part only)
+        """
+        from .multivector import MultiVector
+        
+        if x.algebra != self or y.algebra != self:
+            raise ValueError("Multivectors must belong to this algebra")
+            
+        # Scalar product: only terms where kx ^ ky == 0 (same basis elements)
+        result_terms = {}
+        
+        for kx, vx in zip(x._keys, x._values):
+            for ky, vy in zip(y._keys, y._values):
+                if kx == ky:  # Same basis element
+                    # Get the sign from the Cayley table
+                    sign = self.signs[kx, ky] if hasattr(self, 'signs') else 1
+                    
+                    if sign != 0:
+                        key_out = 0  # Always scalar for scalar product
+                        
+                        # Compute the coefficient
+                        if isinstance(vx, (int, float, complex)) and isinstance(vy, (int, float, complex)):
+                            coeff = sign * vx * vy
+                        else:
+                            # Handle symbolic case
+                            import sympy
+                            coeff = sign * sympy.Mul(vx, vy, evaluate=False) if sign > 0 else -sympy.Mul(vx, vy, evaluate=False)
+                        
+                        # Accumulate terms
+                        if key_out in result_terms:
+                            result_terms[key_out] += coeff
+                        else:
+                            result_terms[key_out] = coeff
+        
+        # Create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        return MultiVector.fromkeysvalues(self, keys=(0,), values=[result_terms[0]])
+    
+    def sp(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for scalar_product."""
+        return self.scalar_product(x, y)
+    
+    def projection(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the projection of x onto y: (x · y) * ~y.
+        
+        Args:
+            x: Multivector to project
+            y: Multivector to project onto
+            
+        Returns:
+            Projection of x onto y
+        """
+        # Projection formula: (x | y) * ~y
+        inner_prod = self.inner_product(x, y)
+        y_reverse = y.reverse()
+        return self.gp(inner_prod, y_reverse)
+    
+    def proj(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for projection."""
+        return self.projection(x, y)
+    
+    def involute(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the grade involution of a multivector.
+        
+        Grade involution flips the sign of odd grades (1, 3, 5, ...).
+        
+        Args:
+            x: Multivector to apply involution to
+            
+        Returns:
+            Grade involute of x
+        """
+        from .multivector import MultiVector
+        
+        if not hasattr(x, '_keys') or not x._keys:
+            return x.copy()
+        
+        # Create new values with involution signs applied
+        new_values = []
+        for k, v in zip(x._keys, x._values):
+            grade = bin(k).count('1')  # Count number of 1s = grade
+            
+            # Grade involution: flip sign for grades 1, 3, 5, ... (odd grades)
+            sign_factor = -1 if grade % 2 == 1 else 1
+            
+            if isinstance(v, (int, float, complex)):
+                new_values.append(sign_factor * v)
+            else:
+                # Handle symbolic case
+                import sympy
+                if sign_factor == 1:
+                    new_values.append(v)
+                else:
+                    new_values.append(-v)
+        
+        return MultiVector.fromkeysvalues(self, x._keys, new_values)
+    
+    def clifford_conjugate(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the Clifford conjugate of a multivector.
+        
+        Clifford conjugate flips the sign of grades 1 and 2.
+        
+        Args:
+            x: Multivector to apply conjugation to
+            
+        Returns:
+            Clifford conjugate of x
+        """
+        from .multivector import MultiVector
+        
+        if not hasattr(x, '_keys') or not x._keys:
+            return x.copy()
+        
+        # Create new values with conjugation signs applied
+        new_values = []
+        for k, v in zip(x._keys, x._values):
+            grade = bin(k).count('1')  # Count number of 1s = grade
+            
+            # Clifford conjugate: flip sign for grades 1, 2
+            sign_factor = -1 if grade in (1, 2) else 1
+            
+            if isinstance(v, (int, float, complex)):
+                new_values.append(sign_factor * v)
+            else:
+                # Handle symbolic case
+                import sympy
+                if sign_factor == 1:
+                    new_values.append(v)
+                else:
+                    new_values.append(-v)
+        
+        return MultiVector.fromkeysvalues(self, x._keys, new_values)
+    
+    def conjugate(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for clifford_conjugate."""
+        return self.clifford_conjugate(x)
+    
+    def polarity(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the polarity (multiplication by pseudoscalar inverse) of a multivector.
+        
+        Polarity is defined as x * I^(-1) where I is the pseudoscalar.
+        
+        Args:
+            x: Multivector to apply polarity to
+            
+        Returns:
+            Polarity of x
+        """
+        try:
+            pss_inv = self.pss_inv
+            return self.gp(x, pss_inv)
+        except AttributeError:
+            raise NotImplementedError("Polarity requires pseudoscalar inverse (pss_inv)")
+    
+    def unpolarity(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the unpolarity (multiplication by pseudoscalar) of a multivector.
+        
+        Unpolarity is defined as x * I where I is the pseudoscalar.
+        
+        Args:
+            x: Multivector to apply unpolarity to
+            
+        Returns:
+            Unpolarity of x
+        """
+        return self.gp(x, self.pss)
+    
+    def hodge_dual(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the Hodge dual of a multivector.
+        
+        The Hodge dual maps k-vectors to (n-k)-vectors.
+        
+        Args:
+            x: Multivector to compute Hodge dual of
+            
+        Returns:
+            Hodge dual of x
+        """
+        from .multivector import MultiVector
+        
+        if not hasattr(x, '_keys') or not x._keys:
+            return x.copy()
+        
+        # Hodge dual: for each basis blade eI, compute eI* = eI * I / |I|^2
+        # where I is the pseudoscalar
+        result_terms = {}
+        algebra_len = len(self)
+        key_pss = algebra_len - 1  # All bits set
+        
+        for k, v in zip(x._keys, x._values):
+            # Hodge dual key: complement of k
+            key_dual = key_pss ^ k
+            
+            # Sign from the geometric product with pseudoscalar
+            if hasattr(self, 'signs'):
+                sign = self.signs.get((k, key_pss), 1)
+            else:
+                sign = 1
+            
+            # Apply sign
+            if isinstance(v, (int, float, complex)):
+                coeff = sign * v
+            else:
+                # Handle symbolic case
+                import sympy
+                coeff = sign * v if sign > 0 else -v
+            
+            if key_dual in result_terms:
+                result_terms[key_dual] += coeff
+            else:
+                result_terms[key_dual] = coeff
+        
+        # Create result
+        if not result_terms:
+            return MultiVector.fromkeysvalues(self, keys=(), values=[])
+            
+        sorted_keys = tuple(sorted(result_terms.keys()))
+        sorted_values = [result_terms[k] for k in sorted_keys]
+        
+        return MultiVector.fromkeysvalues(self, keys=sorted_keys, values=sorted_values)
+    
+    def hodge(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for hodge_dual."""
+        return self.hodge_dual(x)
+    
+    def unhodge_dual(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the inverse Hodge dual of a multivector.
+        
+        Args:
+            x: Multivector to compute inverse Hodge dual of
+            
+        Returns:
+            Inverse Hodge dual of x
+        """
+        # The inverse Hodge dual is the Hodge dual applied again (in most cases)
+        # This is a simplification - the full implementation depends on the metric
+        return self.hodge_dual(x)
+    
+    def unhodge(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for unhodge_dual."""
+        return self.unhodge_dual(x)
+    
+    def outer_exponential(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the outer exponential of a multivector: exp_∧(x).
+        
+        For a k-vector B, exp_∧(B) = 1 + B + B∧B/2! + B∧B∧B/3! + ...
+        
+        Args:
+            x: Multivector to compute outer exponential of
+            
+        Returns:
+            Outer exponential of x
+        """
+        from .multivector import MultiVector
+        import math
+        
+        # Start with the identity (scalar 1)
+        result = self.multivector(values={0: 1})  # Explicit scalar multivector
+        
+        # For vectors, the series terminates after the first term
+        if x.grades == (1,):
+            return result + x
+        
+        # For bivectors and higher, compute the series
+        # We'll compute a few terms of the series
+        current_term = x.copy()
+        factorial = 1
+        
+        for n in range(1, 8):  # Compute first 7 terms
+            factorial *= n
+            result = result + current_term / factorial
+            
+            # Compute next term: current_term ∧ x
+            try:
+                next_term = self.outer_product(current_term, x)
+                # If the outer product is zero, the series terminates
+                if next_term.is_zero():
+                    break
+                current_term = next_term
+            except:
+                break
+        
+        return result
+    
+    def outerexp(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for outer_exponential."""
+        return self.outer_exponential(x)
+    
+    def outer_sine(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the outer sine of a multivector.
+        
+        For a bivector B, sin_∧(B) = B - B∧B∧B/3! + B∧B∧B∧B∧B/5! - ...
+        
+        Args:
+            x: Multivector to compute outer sine of
+            
+        Returns:
+            Outer sine of x
+        """
+        from .multivector import MultiVector
+        import math
+        
+        # For vectors, sin_∧(v) = v
+        if x.grades == (1,):
+            return x.copy()
+        
+        # For bivectors and higher, compute the series
+        result = self.scalar(0)
+        current_term = x.copy()
+        factorial = 1
+        sign = 1
+        
+        for n in range(1, 8, 2):  # Odd terms only: 1, 3, 5, 7, ...
+            factorial *= n
+            if n > 1:
+                factorial *= (n - 1)
+            
+            result = result + sign * current_term / factorial
+            sign *= -1
+            
+            # Compute next odd term: current_term ∧ x ∧ x
+            try:
+                next_term = self.outer_product(self.outer_product(current_term, x), x)
+                if next_term.is_zero():
+                    break
+                current_term = next_term
+            except:
+                break
+        
+        return result
+    
+    def outersin(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for outer_sine."""
+        return self.outer_sine(x)
+    
+    def outer_cosine(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the outer cosine of a multivector.
+        
+        For a bivector B, cos_∧(B) = 1 - B∧B/2! + B∧B∧B∧B/4! - ...
+        
+        Args:
+            x: Multivector to compute outer cosine of
+            
+        Returns:
+            Outer cosine of x
+        """
+        from .multivector import MultiVector
+        import math
+        
+        # For vectors, cos_∧(v) = 1
+        if x.grades == (1,):
+            return self.multivector(values={0: 1})  # Explicit scalar multivector
+        
+        # For bivectors and higher, compute the series
+        result = self.multivector(values={0: 1})  # Start with scalar 1
+        current_term = self.outer_product(x, x)  # Start with x∧x
+        factorial = 2
+        sign = -1
+        
+        for n in range(2, 8, 2):  # Even terms: 2, 4, 6, ...
+            result = result + sign * current_term / factorial
+            sign *= -1
+            
+            # Compute next even term
+            factorial *= (n + 1) * (n + 2)
+            
+            try:
+                next_term = self.outer_product(self.outer_product(current_term, x), x)
+                if next_term.is_zero():
+                    break
+                current_term = next_term
+            except:
+                break
+        
+        return result
+    
+    def outercos(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for outer_cosine."""
+        return self.outer_cosine(x)
+    
+    def outer_tangent(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Compute the outer tangent of a multivector: tan_∧(x) = sin_∧(x) / cos_∧(x).
+        
+        Args:
+            x: Multivector to compute outer tangent of
+            
+        Returns:
+            Outer tangent of x
+        """
+        sin_x = self.outer_sine(x)
+        cos_x = self.outer_cosine(x)
+        return self.division(sin_x, cos_x)
+    
+    def outertan(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for outer_tangent."""
+        return self.outer_tangent(x)
+    
+    def add_operation(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Optimized addition operation for multivectors.
+        
+        This is equivalent to x + y but can be optimized for specific cases.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Sum x + y
+        """
+        # For now, delegate to the built-in addition
+        return x + y
+    
+    def add(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for add_operation."""
+        return self.add_operation(x, y)
+    
+    def sub_operation(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """
+        Optimized subtraction operation for multivectors.
+        
+        This is equivalent to x - y but can be optimized for specific cases.
+        
+        Args:
+            x: First multivector
+            y: Second multivector
+            
+        Returns:
+            Difference x - y
+        """
+        # For now, delegate to the built-in subtraction
+        return x - y
+    
+    def sub(self, x: 'MultiVector', y: 'MultiVector') -> 'MultiVector':
+        """Alias for sub_operation."""
+        return self.sub_operation(x, y)
+    
+    def neg_operation(self, x: 'MultiVector') -> 'MultiVector':
+        """
+        Negation operation for multivectors.
+        
+        Args:
+            x: Multivector to negate
+            
+        Returns:
+            Negated multivector -x
+        """
+        # Delegate to the built-in negation
+        return -x
+    
+    def neg(self, x: 'MultiVector') -> 'MultiVector':
+        """Alias for neg_operation."""
+        return self.neg_operation(x)
 
     @classmethod
     def from_name(cls, name: str) -> 'Algebra':

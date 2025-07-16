@@ -1,13 +1,6 @@
-# -*- coding: utf-8 -*-
-"""
-Code Generation Module for Geometric Algebra
-============================================
-
-Generates optimized functions for Geometric Algebra operations using SymPy
-for symbolic representation and compilation.
-"""
-
 from __future__ import annotations
+print("--- DEBUG: Executing with the NEW, CORRECTED codegen.py ---") # <-- CORRECT LOCATION
+
 
 # Standard Library Imports
 import string
@@ -24,6 +17,9 @@ from collections import Counter, defaultdict, namedtuple
 from dataclasses import dataclass
 from functools import reduce, cached_property, partial
 from itertools import product, combinations, groupby
+
+from sympy.printing.numpy import NumPyPrinter
+from sympy import Mul, Add # Make sure Mul and Add are imported
 import ast # For literal_eval safely
 
 # Typing Imports
@@ -48,13 +44,13 @@ log = logging.getLogger(__name__)
 
 # Defer Internal Imports using TYPE_CHECKING
 if TYPE_CHECKING:
-    from kingdon.multivector import MultiVector
-    from kingdon.algebra import Algebra, AlgebraError # Import AlgebraError if defined there
+    from .multivector import MultiVector
+    from .algebra import Algebra, AlgebraError # Import AlgebraError if defined there
 
 # Define AlgebraError locally if not imported
 # Ensure this matches the definition in operator_dict.py or a central location
 try:
-    from kingdon.operator_dict import AlgebraError
+    from .operator_dict import AlgebraError
 except ImportError:
     class AlgebraError(Exception):
         """Custom exception for errors related to Geometric Algebra operations."""
@@ -64,7 +60,7 @@ except ImportError:
 # Helper function to safely import MultiVector only when needed at runtime
 def _get_mv_class():
     """Dynamically imports and returns the MultiVector class."""
-    from kingdon.multivector import MultiVector
+    from .multivector import MultiVector
     return MultiVector
 
 #=============================================================================
@@ -230,47 +226,42 @@ def do_codegen(codegen_func: Callable[..., Dict[int, Expr]], *mvs: 'MultiVector'
         compiled_func = error_func
         keys_out = keys_out if keys_out else (0,) # Ensure keys_out is valid
 
-    # --- Create Wrapper Function ---
-    num_expected_args = len(mvs)
-    arg_lengths = [len(mv.values()) for mv in mvs] # Store initial lengths for potential checks
+    # In codegen.py, inside the `do_codegen` function
+
+    # ... (code before the wrapper function) ...
+
+    num_expected_args = len(mvs) # Number of original symbolic multivectors
+
+# In codegen.py, inside the `do_codegen` function
+# THIS IS THE ORIGINAL, CORRECT WRAPPER
+
+# In codegen.py, inside the `do_codegen` function
+# THIS IS THE CORRECT, SIMPLIFIED WRAPPER
 
     def wrapper_func(*runtime_args):
-        """ Wrapper to flatten input values and add runtime error context. """
-        # Use specific name in runtime errors
-        wrapper_name = f"{funcname}_runtime_wrapper"
-        if len(runtime_args) != num_expected_args:
-            raise TypeError(f"{wrapper_name} expected {num_expected_args} arguments, got {len(runtime_args)}")
-
-        flat_args = []
+        """
+        Wrapper to execute the compiled function and handle runtime errors.
+        It receives a flat tuple of all coefficient values.
+        """
+        # The compiled function expects a flat sequence of arguments.
+        if len(runtime_args) != len(all_input_symbols):
+             raise TypeError(f"{funcname} expected {len(all_input_symbols)} arguments, got {len(runtime_args)}")
+        
         try:
-            for i, rt_arg in enumerate(runtime_args):
-                 # Validation from previous step retained
-                 if not isinstance(rt_arg, (list, tuple, np.ndarray)):
-                      # Try to recover if it's a single number for a scalar MV input
-                      if num_expected_args == 1 and input_keys_repr[0] == (0,) and isinstance(rt_arg, (int, float, complex, sympy.Expr, np.number)):
-                           rt_arg = [rt_arg]
-                      else:
-                           raise TypeError(f"Argument {i} passed to {wrapper_name} must be list/tuple/ndarray, got {type(rt_arg).__name__}.")
-                 # Optional length check (can be noisy)
-                 # if len(rt_arg) != arg_lengths[i]:
-                 #    warnings.warn(f"Runtime argument {i} for {wrapper_name} has length {len(rt_arg)}, expected {arg_lengths[i]}.")
-                 flat_args.extend(rt_arg)
-        except TypeError as e_flat:
-             raise TypeError(f"Error preparing arguments for {wrapper_name}: {e_flat}") from e_flat
-
-        # Call the actual compiled function
-        try:
-            result = compiled_func(*flat_args)
-            # Ensure result is always a list
+            # Execute the JIT-compiled function
+            result = compiled_func(*runtime_args)
+            # Ensure the output is always a list, as expected by the caller
             return result if isinstance(result, list) else [result]
         except Exception as e_runtime:
-             # Add more context to runtime errors from the compiled function
-             log.error(f"Runtime error in compiled function {funcname} (op: {op_name}, keys: {input_keys_repr} -> {keys_out}): {e_runtime}", exc_info=True)
-             # Avoid logging potentially large args directly in error message
-             raise AlgebraError(f"Runtime error executing compiled code for '{op_name}' (input keys: {input_keys_repr}, output keys: {keys_out}). Check input values. Original error: {e_runtime}") from e_runtime
+             # Add context to any error that occurs inside the compiled code
+             raise AlgebraError(f"Runtime error in compiled function '{funcname}': {e_runtime}") from e_runtime
 
     wrapper_func.__name__ = f"{funcname}_runtime_wrapper"
     return CodegenOutput(keys_out, wrapper_func)
+
+
+
+
 
 
 def lambdify(args: List[Symbol], exprs: List[Expr], funcname: str,
@@ -278,22 +269,27 @@ def lambdify(args: List[Symbol], exprs: List[Expr], funcname: str,
              printer: Any = None,
              dummify: bool = False, cse: bool = False) -> Callable:
     """ Turn symbolic expressions into a Python function using SymPy's lambdify. """
-    # (Improved error reporting)
+
     if printer is None:
-         printer = LambdaPrinter({'fully_qualified_modules': False, 'inline': True, 'allow_unknown_functions': True})
+         printer = NumPyPrinter()
+
+    # THE DEFINITIVE FIX IS HERE:
+    # We are explicitly mapping the symbolic SymPy operations `Mul` and `Add`
+    # to the desired NumPy functions `np.multiply` and `np.add`.
+    # This leaves no ambiguity for the `*` and `+` operators.
     if modules is None:
-        # Define standard modules, ensuring compatibility with common SymPy functions
-        modules = ['numpy', {'conjugate': np.conjugate, 'sqrt': np.sqrt, 'cos': np.cos, 'sin': np.sin,
-                             'cosh': np.cosh, 'sinh': np.sinh, 'exp': np.exp, 'Abs': np.abs,
-                             # Add more mappings if needed by generated expressions
-                             }]
+        modules = [
+            {'Mul': np.multiply, 'Add': np.add}, # Explicit mapping
+            'numpy'                             # General numpy namespace
+        ]
+
     try:
-         # Ensure exprs contains only SymPy Basic types before lambdify
+         # The rest of this function remains the same as before.
          valid_exprs = []
          for i, expr in enumerate(exprs):
               if isinstance(expr, Basic): valid_exprs.append(expr)
               else:
-                   try: valid_exprs.append(sympify(expr)) # Attempt conversion
+                   try: valid_exprs.append(sympify(expr))
                    except (TypeError, ValueError) as e_sympify:
                         raise TypeError(f"Expression at index {i} ('{expr}') cannot be converted to SymPy expression for lambdify in '{funcname}'. Error: {e_sympify}") from e_sympify
 
@@ -304,7 +300,6 @@ def lambdify(args: List[Symbol], exprs: List[Expr], funcname: str,
          compiled_func.__code__ = compiled_func.__code__.replace(co_filename=filename)
          func_sig = f"def {funcname}({', '.join(map(str, args))}):"
          try:
-              # Attempt to generate source, might fail for complex expressions
               if isinstance(valid_exprs, (list, tuple)):
                   if len(valid_exprs) == 1: return_stmt = f"    return {printer.doprint(valid_exprs[0])}"
                   else: return_stmt = f"    return [{', '.join(printer.doprint(e) for e in valid_exprs)}]"
@@ -313,15 +308,14 @@ def lambdify(args: List[Symbol], exprs: List[Expr], funcname: str,
               linecache.cache[filename] = (len(fake_source), None, fake_source.splitlines(True), filename)
          except Exception as e_print:
               log.warning(f"Could not generate source representation for {funcname}: {e_print}")
-              # Store minimal info in linecache
               linecache.cache[filename] = (1, None, [f"# Error generating source for {funcname}"], filename)
 
          return compiled_func
     except Exception as e:
-         # Catch any error during lambdify process
          log.error(f"SymPy lambdify failed for '{funcname}' with args {args} and expressions {exprs}: {e}", exc_info=True)
-         # Raise a more specific error indicating compilation failure
          raise AlgebraError(f"Failed to compile function '{funcname}' using lambdify. Error: {e}") from e
+
+
 
 
 #=============================================================================
