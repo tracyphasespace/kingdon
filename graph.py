@@ -16,8 +16,8 @@ Key components:
 - `GraphWidget`: Main widget class that handles rendering and interaction
 
 Example:
-    >>> from kingdon.algebra import Algebra
-    >>> from kingdon.graph import GraphWidget
+    >>> from .algebra import Algebra
+    >>> from .graph import GraphWidget
     >>> alg = Algebra(p=3, q=0, r=1)  # 3D projective geometric algebra
     >>> v1 = alg.multivector(values=[1, 0, 0, 0], grades=(1,))
     >>> v2 = alg.multivector(values=[0, 1, 0, 0], grades=(1,))
@@ -37,7 +37,7 @@ import anywidget
 import traitlets
 import numpy as np
 
-from kingdon.multivector import MultiVector
+from .multivector import MultiVector
 
 
 # Define the tree types for recursive encoding

@@ -226,35 +226,44 @@ def do_codegen(codegen_func: Callable[..., Dict[int, Expr]], *mvs: 'MultiVector'
         compiled_func = error_func
         keys_out = keys_out if keys_out else (0,) # Ensure keys_out is valid
 
-    # In codegen.py, inside the `do_codegen` function
-
-    # ... (code before the wrapper function) ...
-
-    num_expected_args = len(mvs) # Number of original symbolic multivectors
-
-# In codegen.py, inside the `do_codegen` function
-# THIS IS THE ORIGINAL, CORRECT WRAPPER
-
-# In codegen.py, inside the `do_codegen` function
-# THIS IS THE CORRECT, SIMPLIFIED WRAPPER
+    # --- Create Wrapper Function ---
+    num_expected_args = len(mvs)
+    arg_lengths = [len(mv.values()) for mv in mvs] # Store initial lengths for potential checks
 
     def wrapper_func(*runtime_args):
-        """
-        Wrapper to execute the compiled function and handle runtime errors.
-        It receives a flat tuple of all coefficient values.
-        """
-        # The compiled function expects a flat sequence of arguments.
-        if len(runtime_args) != len(all_input_symbols):
-             raise TypeError(f"{funcname} expected {len(all_input_symbols)} arguments, got {len(runtime_args)}")
-        
+        """ Wrapper to flatten input values and add runtime error context. """
+        # Use specific name in runtime errors
+        wrapper_name = f"{funcname}_runtime_wrapper"
+        if len(runtime_args) != num_expected_args:
+            raise TypeError(f"{wrapper_name} expected {num_expected_args} arguments, got {len(runtime_args)}")
+
+        flat_args = []
         try:
-            # Execute the JIT-compiled function
-            result = compiled_func(*runtime_args)
-            # Ensure the output is always a list, as expected by the caller
+            for i, rt_arg in enumerate(runtime_args):
+                 # Validation from previous step retained
+                 if not isinstance(rt_arg, (list, tuple, np.ndarray)):
+                      # Try to recover if it's a single number for a scalar MV input
+                      if num_expected_args == 1 and input_keys_repr[0] == (0,) and isinstance(rt_arg, (int, float, complex, sympy.Expr, np.number)):
+                           rt_arg = [rt_arg]
+                      else:
+                           raise TypeError(f"Argument {i} passed to {wrapper_name} must be list/tuple/ndarray, got {type(rt_arg).__name__}.")
+                 # Optional length check (can be noisy)
+                 # if len(rt_arg) != arg_lengths[i]:
+                 #    warnings.warn(f"Runtime argument {i} for {wrapper_name} has length {len(rt_arg)}, expected {arg_lengths[i]}.")
+                 flat_args.extend(rt_arg)
+        except TypeError as e_flat:
+             raise TypeError(f"Error preparing arguments for {wrapper_name}: {e_flat}") from e_flat
+
+        # Call the actual compiled function
+        try:
+            result = compiled_func(*flat_args)
+            # Ensure result is always a list
             return result if isinstance(result, list) else [result]
         except Exception as e_runtime:
-             # Add context to any error that occurs inside the compiled code
-             raise AlgebraError(f"Runtime error in compiled function '{funcname}': {e_runtime}") from e_runtime
+             # Add more context to runtime errors from the compiled function
+             log.error(f"Runtime error in compiled function {funcname} (op: {op_name}, keys: {input_keys_repr} -> {keys_out}): {e_runtime}", exc_info=True)
+             # Avoid logging potentially large args directly in error message
+             raise AlgebraError(f"Runtime error executing compiled code for '{op_name}' (input keys: {input_keys_repr}, output keys: {keys_out}). Check input values. Original error: {e_runtime}") from e_runtime
 
     wrapper_func.__name__ = f"{funcname}_runtime_wrapper"
     return CodegenOutput(keys_out, wrapper_func)

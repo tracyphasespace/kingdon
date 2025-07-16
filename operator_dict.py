@@ -16,12 +16,12 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Ty
 from sympy import Symbol # Keep Symbol import
 
 # Keep CodegenOutput import here for type hints
-from kingdon.codegen import CodegenOutput
+from .codegen import CodegenOutput
 
 # Use TYPE_CHECKING for imports only needed for type hints
 if TYPE_CHECKING:
-    from kingdon.algebra import Algebra
-    from kingdon.multivector import MultiVector
+    from .algebra import Algebra
+    from .multivector import MultiVector
 
 # Define AlgebraError locally if not imported from elsewhere
 class AlgebraError(Exception):
@@ -32,49 +32,43 @@ class AlgebraError(Exception):
 class OperatorDict(Mapping):
     """
     A dictionary-like object that generates and caches geometric algebra operations.
-    (Docstring unchanged)
+    It acts as a Just-In-Time (JIT) compiler for GA operations. When an operation
+    is called for a new combination of multivector keys, it generates, compiles,
+    and caches an optimized function. Subsequent calls use the cached function.
     """
     name: str
     codegen: Callable[..., Any]
     algebra: 'Algebra'
     operator_dict: Dict[Tuple[Tuple[int, ...], ...], CodegenOutput] = field(
         default_factory=dict, init=False, repr=False)
-    codegen_symbolcls: Callable = field(default=Symbol, repr=False) # Retained Symbol
+    codegen_symbolcls: Callable = field(default=Symbol, repr=False)
 
     def __getitem__(self, keys_in: Tuple[Tuple[int, ...], ...]) -> CodegenOutput:
-        """ Get or create a compiled operation for the given key pattern. """
-        # Input validation: Ensure keys_in is a tuple of tuples of ints
+        """
+        Get or create a compiled operation for the given key pattern.
+        This is the core of the JIT cache.
+        """
         if not isinstance(keys_in, tuple) or not all(isinstance(k_tuple, tuple) for k_tuple in keys_in):
              raise TypeError(f"OperatorDict key must be a tuple of tuples, got {type(keys_in)}")
-        # Further validation could check if ints are valid keys for the algebra if needed
 
+        # JIT Cache Logic: If not in cache, generate, compile, and store it.
         if keys_in not in self.operator_dict:
-            # Moved import inside
-            from kingdon.codegen import do_codegen
-            from kingdon.multivector import MultiVector # Needed for isinstance check
+            from .codegen import do_codegen
 
-            # Create symbolic multivectors
-            mvs = []
-            arg_names = string.ascii_lowercase[:len(keys_in)]
             try:
+                # Create symbolic multivectors for this specific key structure
+                mvs = []
+                arg_names = string.ascii_lowercase[:len(keys_in)]
                 for name, keys in zip(arg_names, keys_in):
-                    # Use algebra.multivector factory for symbolic creation
-                    # Pass name explicitly to trigger symbolic path
                     mvs.append(self.algebra.multivector(name=name, keys=keys))
-            except (ValueError, TypeError) as e:
-                 # Catch errors during symbolic multivector creation
-                 raise AlgebraError(f"Error creating symbolic multivector for operator '{self.name}' with input keys {keys_in}: {e}") from e
+                
+                # Generate, compile, and cache the new function
+                output = do_codegen(self.codegen, *mvs)
+                self.operator_dict[keys_in] = output
 
-            # Generate code for the operation
-            try:
-                 output = do_codegen(self.codegen, *mvs)
-                 self.operator_dict[keys_in] = output
-            except NotImplementedError:
-                 # Propagate NotImplementedError clearly
-                 raise NotImplementedError(f"Symbolic code generation for operator '{self.name}' is not implemented for input keys {keys_in}.")
             except Exception as e:
-                 # Catch other codegen errors
-                 raise AlgebraError(f"Code generation failed for operator '{self.name}' with input keys {keys_in}: {e}") from e
+                # Add context to any error during the generation process
+                raise AlgebraError(f"Code generation failed for operator '{self.name}' with input keys {keys_in}.") from e
 
         return self.operator_dict[keys_in]
 
@@ -86,44 +80,41 @@ class OperatorDict(Mapping):
         """Return the number of cached operations."""
         return len(self.operator_dict)
 
+    # In operator_dict.py
+    # FINAL, DEFINITIVE __call__ method in OperatorDict
+
+    # In operator_dict.py
+    # FINAL, DEFINITIVE __call__ in OperatorDict
+
     def __call__(self, *mvs: 'MultiVector') -> 'MultiVector':
-        """ Apply the operation to the given multivectors. """
-        from kingdon.multivector import MultiVector # Local import
+        """
+        Apply the operation to the given multivectors, with scalar coercion.
+        """
+        from .multivector import MultiVector
+        
+        # 1. Coerce scalars.
+        coerced_mvs = [self.algebra.scalar(mv) if not isinstance(mv, MultiVector) else mv for mv in mvs]
+        mvs = tuple(coerced_mvs)
 
-        # --- Input Validation ---
-        if not mvs:
-             raise TypeError(f"Operator '{self.name}' requires at least one MultiVector argument.")
-        if not all(isinstance(mv, MultiVector) for mv in mvs):
-             arg_types = ", ".join(type(arg).__name__ for arg in mvs)
-             raise TypeError(f"All arguments to operator '{self.name}' must be MultiVector instances. Got: {arg_types}")
-        if not all(mv.algebra == self.algebra for mv in mvs):
-             raise ValueError(f"All MultiVector arguments for operator '{self.name}' must belong to the same algebra.")
-
-        # --- Get Compiled Function ---
+        # 2. Get key and compiled function.
         keys_in = tuple(mv.keys() for mv in mvs)
-        try:
-             output = self[keys_in] # Calls __getitem__ which handles codegen/caching
-        except (AlgebraError, NotImplementedError, TypeError, ValueError) as e:
-             # Propagate errors from __getitem__ with context
-             raise type(e)(f"Failed to get/generate function for operator '{self.name}' with input keys {keys_in}: {e}") from e
+        codegen_out = self[keys_in] # JIT compilation happens here on cache miss.
 
-        # --- Prepare Values and Execute ---
-        values_in = tuple(mv.values() for mv in mvs)
+        # 3. Prepare the FLAT list of values. This is the key.
+        values_in = []
+        for mv in mvs:
+            values_in.extend(mv.values())
+
+        # 4. Execute with the flat list.
         try:
-             result_values = output.func(*values_in)
+            result_values = codegen_out.func(*values_in)
         except Exception as e:
-             # Add context to errors during execution of generated code
-             raise AlgebraError(f"Runtime error executing generated code for operator '{self.name}' (input keys: {keys_in}, output keys: {output.keys_out}): {e}") from e
+            raise AlgebraError(f"Runtime error in JIT-compiled code for '{self.name}' (keys: {keys_in}). Original error: {e}") from e
 
-        # --- Construct Result ---
-        try:
-            # Use fromkeysvalues for construction
-             return MultiVector.fromkeysvalues(
-                 self.algebra, keys=output.keys_out, values=result_values
-             )
-        except (ValueError, TypeError) as e:
-            # Add context to errors during result construction
-             raise AlgebraError(f"Error constructing result MultiVector for operator '{self.name}' (output keys: {output.keys_out}): {e}") from e
+        # 5. Construct result.
+        return MultiVector.fromkeysvalues(
+            self.algebra, keys=codegen_out.keys_out, values=result_values
+        )
 
 
 @dataclass
@@ -143,8 +134,8 @@ class UnaryOperatorDict(OperatorDict):
 
         if keys_tuple not in self.operator_dict:
             # Moved import inside
-            from kingdon.codegen import do_codegen
-            from kingdon.multivector import MultiVector # For isinstance check
+            from .codegen import do_codegen
+            from .multivector import MultiVector # For isinstance check
 
             # Create a symbolic multivector
             try:
@@ -164,38 +155,32 @@ class UnaryOperatorDict(OperatorDict):
 
         return self.operator_dict[keys_tuple]
 
+    # In operator_dict.py
+    # FINAL, DEFINITIVE __call__ in UnaryOperatorDict
+
     def __call__(self, mv: 'MultiVector') -> 'MultiVector':
         """ Apply the unary operation to the given multivector. """
-        from kingdon.multivector import MultiVector # Local import
-
-        # --- Input Validation ---
+        from .multivector import MultiVector
+        
         if not isinstance(mv, MultiVector):
-             raise TypeError(f"Argument to unary operator '{self.name}' must be a MultiVector instance. Got: {type(mv).__name__}")
-        if mv.algebra != self.algebra:
-             raise ValueError(f"MultiVector argument for unary operator '{self.name}' does not belong to the correct algebra.")
+            # We can't coerce here as it's meant to be a direct operation
+            raise TypeError(f"Argument to unary operator '{self.name}' must be a MultiVector.")
 
-        # --- Get Compiled Function ---
-        keys_in = (mv.keys(),) # Pass keys as tuple of tuples: ((keys,),)
-        try:
-             output = self[keys_in] # Calls __getitem__
-        except (AlgebraError, NotImplementedError, TypeError, ValueError) as e:
-             raise type(e)(f"Failed to get/generate function for unary operator '{self.name}' with input keys {keys_in[0]}: {e}") from e
+        # 1. Get key and compiled function.
+        keys_in = (mv.keys(),)
+        codegen_out = self[keys_in]
 
-        # --- Execute ---
+        # 2. Execute with the multivector's values.
+        # Note: For unary, mv.values() is already the flat list we need.
         try:
-             # Call the generated function with the multivector's values
-             result_values = output.func(mv.values()) # Unary func takes one arg
+            result_values = codegen_out.func(*mv.values())
         except Exception as e:
-             raise AlgebraError(f"Runtime error executing generated code for unary operator '{self.name}' (input keys: {keys_in[0]}, output keys: {output.keys_out}): {e}") from e
+            raise AlgebraError(f"Runtime error in JIT-compiled code for '{self.name}' (keys: {keys_in}). Original error: {e}") from e
 
-        # --- Construct Result ---
-        try:
-             # Use fromkeysvalues for construction
-             return MultiVector.fromkeysvalues(
-                 self.algebra, keys=output.keys_out, values=result_values
-             )
-        except (ValueError, TypeError) as e:
-             raise AlgebraError(f"Error constructing result MultiVector for unary operator '{self.name}' (output keys: {output.keys_out}): {e}") from e
+        # 3. Construct result.
+        return MultiVector.fromkeysvalues(
+            self.algebra, keys=codegen_out.keys_out, values=result_values
+        )
 
 
 @dataclass
@@ -214,7 +199,7 @@ class Registry(OperatorDict):
 
         if keys_in not in self.operator_dict:
             # Import moved inside
-            from kingdon.codegen import do_codegen
+            from .codegen import do_codegen
 
             # Assume codegen func takes MVs like other OperatorDicts
             mvs = []
@@ -265,7 +250,7 @@ class BladeDict(Mapping):
 
     def __getitem__(self, basis_blade: str) -> 'MultiVector':
         """Get the multivector representing the specified basis blade."""
-        from kingdon.multivector import MultiVector # Local import
+        from .multivector import MultiVector # Local import
 
         # --- Validation using Algebra._blade2canon ---
         try:

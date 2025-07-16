@@ -316,7 +316,7 @@ def matrix_to_multivector(matrix, matrices, algebra):
         TypeError: if algebra has no dimension attribute
     """
     import warnings
-    from kingdon.multivector import MultiVector
+    from .multivector import MultiVector
 
     # Validate inputs
     if not hasattr(algebra, 'd'):

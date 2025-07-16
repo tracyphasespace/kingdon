@@ -15,7 +15,7 @@ Functions:
     matrix_rep_blade: Creates the matrix representation for a specific blade
 
 Example:
-    >>> from kingdon.matrixreps import matrix_rep
+    >>> from .matrixreps import matrix_rep
     >>> # Create matrix representations for a 3D Euclidean geometric algebra
     >>> matrices = matrix_rep(p=3)
     >>> # matrices[0] is the identity (scalar), matrices[1] is e1, matrices[2] is e2, etc.

@@ -22,12 +22,12 @@ __version__ = '1.3.1'
 from sympy import symbols
 
 # Core components
-from kingdon.algebra import Algebra
-from kingdon.multivector import MultiVector
+from .algebra import Algebra
+from .multivector import MultiVector
 from .operator_dict import AlgebraError # <--- ADDED THIS LINE
 
 # Factory functions for easy object creation
-from kingdon.ga_factory import (
+from .ga_factory import (
     create_vector,
     create_bivector,
     create_scalar,
@@ -37,11 +37,11 @@ from kingdon.ga_factory import (
 )
 
 # Matrix representation functions
-from kingdon.matrixreps import matrix_rep
+from .matrixreps import matrix_rep
 
 # Visualization (optional)
 try:
-    from kingdon.graph import GraphWidget
+    from .graph import GraphWidget
 except ImportError:
     pass
 
@@ -77,7 +77,6 @@ def version() -> str:
     """Return the version of the Kingdon library."""
     return __version__
 
-
 # Optional: Define __all__ to control `from kingdon import *`
 __all__ = [
     'Algebra',
@@ -98,5 +97,3 @@ __all__ = [
 # Conditionally add GraphWidget to __all__ if imported
 if 'GraphWidget' in locals():
     __all__.append('GraphWidget')
-
-

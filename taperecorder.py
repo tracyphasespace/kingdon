@@ -14,12 +14,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Un
 
 # Use TYPE_CHECKING to avoid circular imports
 if TYPE_CHECKING:
-    from kingdon.algebra import Algebra, AlgebraError
-    from kingdon.operator_dict import OperatorDict, UnaryOperatorDict # For type hints
+    from .algebra import Algebra, AlgebraError
+    from .operator_dict import OperatorDict, UnaryOperatorDict # For type hints
 
 # Ensure AlgebraError is defined or imported
 try:
-    from kingdon.operator_dict import AlgebraError
+    from .operator_dict import AlgebraError
 except ImportError:
     class AlgebraError(Exception):
         """Custom exception for errors related to Geometric Algebra operations."""

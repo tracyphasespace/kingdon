@@ -16,8 +16,8 @@ The module includes functions for creating:
 - Special elements like pseudoscalars, rotors, and reflectors
 
 Example:
-    >>> from kingdon.algebra import Algebra
-    >>> from kingdon.ga_factory import create_vector, create_bivector
+    >>> from .algebra import Algebra
+    >>> from .ga_factory import create_vector, create_bivector
     >>> alg = Algebra(p=3, q=0, r=1)  # 3D PGA
     >>>
     >>> # Create a vector
@@ -332,7 +332,7 @@ def create_rotor(algebra: Any,
     bivector = create_blade(algebra, indices=[i, j], value=math.sin(angle/2))
     
     # Combine scalar and bivector parts
-    from kingdon.multivector import MultiVector
+    from .multivector import MultiVector
     if isinstance(scalar, MultiVector) and isinstance(bivector, MultiVector):
         # Get the scalar and bivector values
         scalar_value = scalar._values[0]
@@ -375,8 +375,8 @@ def create_translator(algebra: Any,
         A multivector representing the translator
 
     Example:
-        >>> from kingdon.algebra import Algebra
-        >>> from kingdon.ga_factory import create_translator
+        >>> from .algebra import Algebra
+        >>> from .ga_factory import create_translator
         >>> alg = Algebra(p=3, q=0, r=1)  # 3D PGA
         >>> # Create a translator for 2 units in the x direction
         >>> T = create_translator(alg, direction=[1, 0, 0], distance=2, name="T")
@@ -427,8 +427,8 @@ def create_reflector(algebra: Any,
         A multivector representing the reflector
 
     Example:
-        >>> from kingdon.algebra import Algebra
-        >>> from kingdon.ga_factory import create_reflector
+        >>> from .algebra import Algebra
+        >>> from .ga_factory import create_reflector
         >>> alg = Algebra(p=3, q=0, r=0)  # 3D Euclidean GA
         >>> # Create a reflector for the xy-plane (normal = z-axis)
         >>> R = create_reflector(alg, normal=[0, 0, 1], name="R")
@@ -460,7 +460,7 @@ def create_reflector(algebra: Any,
     norm = math.sqrt(norm_sq)
     
     # Normalize by manually dividing - this avoids needing the norm() method
-    from kingdon.multivector import MultiVector
+    from .multivector import MultiVector
     if isinstance(vector, MultiVector):
         # Create a new multivector with normalized values
         normalized_values = [v / norm for v in vector._values]
