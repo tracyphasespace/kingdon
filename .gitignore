@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+build/
+dist/
+*.egg-info/
+
+.pytest_cache/
+.venv/ # If you ever accidentally create one here
